@@ -1,0 +1,6 @@
+{
+  "name": "TradeGuard",
+  "description": "AI Chart Analysis for Forex, Crypto & Indices — institutional analyst mode chart reading for SMC, ICT, and Price Action.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
