@@ -53,182 +53,9 @@ const initialDb: DatabaseSchema = {
       created_at: new Date(Date.now() - 86400000 * 30).toISOString(),
     },
   ],
-  signals: [
-    {
-      id: 'sig_btc_sample_h1',
-      created_at: new Date(Date.now() - 3600000 * 3).toISOString(),
-      user_id: 'usr_trader_demo',
-      asset: 'BTCUSDT',
-      assetClass: 'Crypto',
-      timeframe: 'H1',
-      strategy: 'ICT',
-      bias: 'BULLISH',
-      entry: 105250,
-      alternativeEntry: 105050,
-      stopLoss: 104800,
-      takeProfit: 106600,
-      takeProfit2: 107200,
-      takeProfit3: 108500,
-      riskReward: '1 : 3.0',
-      confidence: 89,
-      session: 'New York',
-      reasoning: [
-        'Bullish Break of Structure (BOS) confirmed on H1 closing candle above 105,100 high.',
-        'Clean liquidity sweep of Asian session low below 104,900 with immediate aggressive wick rejection.',
-        'FVG (Fair Value Gap) retest holding at 105,300 offering high-probability discount entry.',
-        'NY session morning momentum driving institutional volume expansion.',
-      ],
-      marketStructure: {
-        trend: 'Uptrend',
-        structure: 'Bullish BOS',
-        swingHigh: '106,600',
-        swingLow: '104,800',
-        protectedHigh: '108,500',
-        protectedLow: '104,800',
-        bos: true,
-        choch: false,
-      },
-      smcIct: {
-        bos: 'Confirmed H1 BOS at 105,120',
-        choch: 'Prior bullish CHOCH at 104,950',
-        fvg: 'H1 Bullish FVG spanning 105,180 - 105,320',
-        orderBlocks: 'H1 Bullish Order Block at 104,850 - 105,020',
-        liquidity: 'Sell-side liquidity swept at 104,880; Buyside liquidity pooled at 106,650 and 107,200',
-        zone: 'Discount (38.2% - 50% Equilibrium Retracement)',
-        supplyDemand: 'Institutional Demand Cluster 104,800 - 105,000',
-        imbalances: 'Single print volume imbalance filled cleanly during NY open',
-      },
-      volatility: {
-        atr: '840.50 USDT',
-        dailyRange: '2,450.00 USDT (54% utilized)',
-        sessionVolatility: 'High',
-      },
-      riskManagement: {
-        riskPercent: 1.0,
-        lotSize: '0.45 BTC',
-        positionSize: '$47,362.50',
-        maximumLoss: '$202.50 (1.0% equity)',
-        expectedProfit: '$607.50 (3.0R Target)',
-        riskRewardRatio: '1 : 3.0',
-      },
-      multiTimeframe: {
-        overallBias: 'BULLISH',
-        htfTrend: 'D1 / H4 Bullish continuation towards 108k macro range high',
-        mtfContext: 'H1 Clear higher highs and higher lows with protected swing low',
-        ltfConfirmation: 'M15 Micro structure break with volume spike upon test of FVG',
-        alignment: 'Full Alignment',
-        perTimeframe: {
-          htf: 'D1 Macro structural bullish continuation',
-          mtf: 'H1 Clean impulse and order block formation',
-          ltf: 'M15 Entry trigger confirmation with tight invalidation',
-        },
-      },
-      strategyScores: [
-        { strategy: 'ICT', score: 94, rationale: 'Textbook liquidity run followed by FVG mitigation.' },
-        { strategy: 'SMC', score: 91, rationale: 'Protected low validation & institutional demand reaction.' },
-        { strategy: 'Price Action', score: 86, rationale: 'Bullish engulfing candle off psychological round level.' },
-        { strategy: 'Breakout', score: 78, rationale: 'Clean expansion through local resistance.' },
-        { strategy: 'Trend Following', score: 88, rationale: 'Trading aligned with H4 and D1 market structure.' },
-      ],
-      recommendedStrategy: {
-        name: 'ICT',
-        why: 'The setup presents textbook ICT liquidity sweep and fair value gap reaction during the NY Killzone.',
-      },
-      qualityScore: {
-        structure: 92,
-        trend: 90,
-        liquidity: 95,
-        volume: 88,
-        riskReward: 90,
-        volatility: 85,
-        overall: 90,
-        grade: 'A+',
-        explanation: 'Institutional grade setup with confluence of liquidity sweep, structural alignment, and pristine 1:3 R:R.',
-      },
-      setupBadge: 'A+',
-      tradeManagement: {
-        moveToBreakEven: 'Move Stop Loss to 105,250 (Entry) once price reaches Take Profit 1 (106,600).',
-        partials: 'Secure 50% partial profit at TP1; leave remaining 50% runner trailing for TP2 & TP3.',
-        earlyExit: 'Close manually if H1 candle closes below 104,900 prior to TP1.',
-        avoidIf: 'Avoid if high-impact FOMC or CPI volatility creates spread widening above 15 pips.',
-      },
-      explanation: {
-        whySelected: 'High confluence institutional ICT setup with HTF/LTF alignment and clean liquidity clearance.',
-        supportingConditions: [
-          'DXY weakness during NY session opening bell',
-          'Crypto market open interest steady with spot CVD expansion',
-          'Asian session low fully taken and rejected in 1 candle',
-        ],
-        strongestSignals: [
-          'H1 Bullish Fair Value Gap holding on re-test',
-          'Sharp displacement candle following sweep',
-          'Favorable 1:3 Risk to Reward to local equal highs',
-        ],
-        invalidationRisks: [
-          'Sustained 1-hour close below 104,800 protected low',
-          'Sudden macroeconomic headline risk or stablecoin de-peg event',
-        ],
-      },
-      annotations: [
-        { type: 'Entry', x: 20, y: 46, x2: 95, y2: 46, label: 'Entry: 105,250', color: '#10b981', price: 105250 },
-        { type: 'Stop Loss', x: 20, y: 64, x2: 95, y2: 64, label: 'SL: 104,800', color: '#f43f5e', price: 104800 },
-        { type: 'Take Profit', x: 20, y: 22, x2: 95, y2: 22, label: 'TP1: 106,600', color: '#10b981', price: 106600 },
-        { type: 'FVG', x: 40, y: 44, x2: 60, y2: 50, label: 'H1 Bullish FVG (105,180 - 105,320)', color: '#38bdf8' },
-        { type: 'Order Block', x: 25, y: 56, x2: 45, y2: 63, label: 'H1 Bullish OB', color: '#818cf8' },
-        { type: 'BOS', x: 50, y: 38, x2: 85, y2: 38, label: 'BOS (105,120)', color: '#34d399' },
-        { type: 'Liquidity Sweep', x: 28, y: 62, x2: 38, y2: 62, label: 'SSL Sweep (104,880)', color: '#fbbf24' },
-      ],
-      validation: {
-        samePair: true,
-        readable: true,
-        notes: 'High clarity chart with unobstructed price action, clear axes, and clean volume profile.',
-      },
-      status: 'Active',
-      outcome: 'Win',
-      pnlR: 3.0,
-      notes: 'Executed on prop firm account. Target 1 achieved with 3R realized profit.',
-    },
-  ],
-  watchlist: [
-    {
-      id: 'w_1',
-      signal_id: 'sig_btc_sample_h1',
-      user_id: 'usr_trader_demo',
-      asset: 'BTCUSDT',
-      timeframe: 'H1',
-      strategy: 'ICT',
-      bias: 'BULLISH',
-      entry: 105250,
-      stopLoss: 104800,
-      takeProfit: 106600,
-      riskReward: '1 : 3.0',
-      confidence: 89,
-      setupBadge: 'A+',
-      status: 'Active',
-      notes: 'Key NY open setup with FVG retest. Watching for TP1.',
-      created_at: new Date(Date.now() - 3600000 * 3).toISOString(),
-    },
-  ],
-  analysisLogs: [
-    {
-      id: 'log_init_1',
-      userId: 'usr_trader_demo',
-      signalId: 'sig_btc_sample_h1',
-      asset: 'BTCUSDT',
-      strategy: 'ICT',
-      htfTimeframe: 'D1',
-      mtfTimeframe: 'H4',
-      ltfTimeframe: 'H1',
-      mode: 'single',
-      status: 'Success',
-      decision: 'BULLISH',
-      confidence: 89,
-      alignment: 'Full Alignment',
-      duration: 1840,
-      aiStatus: 'OK',
-      createdAt: new Date(Date.now() - 3600000 * 3).toISOString(),
-    },
-  ],
+  signals: [],
+  watchlist: [],
+  analysisLogs: [],
 };
 
 function loadDb(): DatabaseSchema {
@@ -238,7 +65,17 @@ function loadDb(): DatabaseSchema {
     }
     if (fs.existsSync(DB_FILE)) {
       const data = fs.readFileSync(DB_FILE, 'utf-8');
-      return JSON.parse(data);
+      const parsed = JSON.parse(data);
+      if (parsed && Array.isArray(parsed.signals)) {
+        parsed.signals = parsed.signals.filter((s: any) =>
+          s.id !== 'sig_btc_sample_h1' &&
+          s.entry !== 105250 &&
+          s.entry !== 4594.5 &&
+          s.entry !== 4602.5 &&
+          s.modelUsed !== 'TradeGuard Institutional Engine'
+        );
+      }
+      return parsed;
     }
   } catch (err) {
     console.error('Failed to read db file, using memory seed:', err);
@@ -500,15 +337,15 @@ function buildAplusConfluenceAudit(s: any): any {
   };
 
   // 9. Premium/Discount alignment
-  const premDisc = mtf.higherTimeframe?.premiumDiscount || (isBull ? 'Discount Zone (< 50%)' : 'Premium Zone (> 50%)');
-  const premDiscOk = isBull ? !premDisc.toLowerCase().includes('premium') : !premDisc.toLowerCase().includes('discount');
+  const premDisc = mtf.higherTimeframe?.premiumDiscount;
+  const premDiscOk = premDisc ? (isBull ? !premDisc.toLowerCase().includes('premium') : !premDisc.toLowerCase().includes('discount')) : false;
   const comp9 = {
     id: 9,
     name: '9. Premium/Discount Alignment',
-    status: premDiscOk ? 'CONFIRMED' : 'PARTIAL',
+    status: premDiscOk ? 'CONFIRMED' : (premDisc ? 'PARTIAL' : 'MISSING'),
     evidence: premDiscOk
       ? `Execution pricing verified: ${isBull ? 'Discount Zone (< 50% Equilibrium)' : 'Premium Zone (> 50% Equilibrium)'}`
-      : `Sub-optimal pricing: ${premDisc}`,
+      : (premDisc ? `Sub-optimal pricing: ${premDisc}` : 'Premium/Discount zone not verified on chart'),
   };
 
   // 10. Clear structural invalidation
@@ -536,13 +373,15 @@ function buildAplusConfluenceAudit(s: any): any {
   // 12. Minimum RR requirement (>= 1:2.0)
   const risk = Math.abs(entry - sl);
   const reward = Math.abs(tp1 - entry);
-  const rrRatio = risk > 0 ? reward / risk : 2.5;
+  const rrRatio = (risk > 0 && entry > 0 && sl > 0 && tp1 > 0) ? reward / risk : 0;
   const rrOk = rrRatio >= 2.0;
   const comp12 = {
     id: 12,
     name: '12. Minimum RR Requirement',
     status: rrOk ? 'CONFIRMED' : (rrRatio >= 1.5 ? 'PARTIAL' : 'MISSING'),
-    evidence: `Calculated mathematical Risk:Reward is 1 : ${rrRatio.toFixed(2)} (Requirement: ≥ 1 : 2.0)`,
+    evidence: rrRatio > 0
+      ? `Calculated mathematical Risk:Reward is 1 : ${rrRatio.toFixed(2)} (Requirement: ≥ 1 : 2.0)`
+      : 'Valid Entry, Stop Loss, and Take Profit required to compute Risk:Reward',
   };
 
   const components: any[] = [comp1, comp2, comp3, comp4, comp5, comp6, comp7, comp8, comp9, comp10, comp11, comp12];
@@ -586,119 +425,14 @@ function buildAplusConfluenceAudit(s: any): any {
 
 function ensureSignalMultiTimeframe(s: any): any {
   if (!s) return s;
-  const isBull = s.bias === 'BULLISH';
-  const entry = s.entry ?? 0;
-  const sl = s.stopLoss ?? 0;
-  const tp1 = s.takeProfit ?? 0;
-  const tp2 = s.takeProfit2 ?? tp1;
-  const rr = s.riskReward || '1 : 2.50';
 
-  if (!s.multiTimeframe) {
-    s.multiTimeframe = {};
-  }
-  const mtf = s.multiTimeframe;
-
-  if (!mtf.higherTimeframe) {
-    mtf.higherTimeframe = {
-      analyzed: true,
-      timeframe: '4H',
-      bias: s.bias || 'BULLISH',
-      structure: s.aplusSmc?.htfSupplyDemand?.type
-        ? `${s.aplusSmc.htfSupplyDemand.type} validated with clean macro order flow.`
-        : 'Major 4H structural order flow holding protected demand above key swing low.',
-      liquidity: mtf.perTimeframe?.htf || 'Major buy-side liquidity pool resting above external equal highs.',
-      poi: s.aplusSmc?.htfSupplyDemand?.status
-        ? `${s.aplusSmc.htfSupplyDemand.status}: ${s.aplusSmc.htfSupplyDemand.type}`
-        : '4H Institutional Demand Zone in deep discount pricing.',
-      swingHigh: tp2,
-      swingLow: sl,
-      protectedLevel: `${sl}`,
-      premiumDiscount: isBull ? 'Discount Zone (< 50% Equilibrium)' : 'Premium Zone (> 50% Equilibrium)',
-      notes: '4H context establishes macro directional bias.',
-      timeframeMismatchFlag: false,
-    };
-  }
-  if (!mtf.middleTimeframe) {
-    mtf.middleTimeframe = {
-      analyzed: true,
-      timeframe: '1H',
-      bias: s.bias || 'BULLISH',
-      structure: s.aplusSmc?.changeInStateOfDelivery?.responsibleCandleStructure || '1H structure refined with clean BOS confirming demand reaction.',
-      bosChoch: s.aplusSmc?.changeInStateOfDelivery?.status === 'CONFIRMED'
-        ? 'Confirmed 1H Break of Structure (BOS) with strong impulse body close.'
-        : '1H Break of Structure (BOS)',
-      liquidity: s.aplusSmc?.liquiditySweep?.priceSwept
-        ? `Sell-side liquidity swept at ${s.aplusSmc.liquiditySweep.priceSwept} prior to displacement.`
-        : 'Internal sell-side liquidity swept before displacement.',
-      poi: s.aplusSmc?.poi?.type
-        ? `${s.aplusSmc.poi.type} (${s.aplusSmc.poi.priceRange || entry})`
-        : '1H Bullish Order Block & Fair Value Gap unmitigated origin zone.',
-      displacement: 'Strong expansion candle breaking structural swing high.',
-      alignmentWithHtf: 'Aligned',
-      notes: '1H confirms structure without divergence against 4H bias.',
-      timeframeMismatchFlag: false,
-    };
-  }
-  if (!mtf.lowerTimeframe) {
-    mtf.lowerTimeframe = {
-      analyzed: true,
-      timeframe: '15M',
-      confirmation: s.setupStatus === 'A+ CONFIRMED' ? 'CONFIRMED' : 'DEVELOPING',
-      mssChoch: 'Confirmed 15M Market Structure Shift (MSS) with displacement body close.',
-      displacement: 'Bullish impulse candle departing decisively from mitigated POI.',
-      fvgOb: '15M Fair Value Gap retest & Order Block defense.',
-      entry: entry,
-      invalidation: sl,
-      shortTermLiquidityTargets: `Targeting internal range liquidity pool at ${tp1}`,
-      notes: '15M triggers sniper execution.',
-      timeframeMismatchFlag: false,
-    };
-  }
-  if (!mtf.finalDecision) {
-    mtf.finalDecision = {
-      direction: isBull ? 'BUY' : s.bias === 'BEARISH' ? 'SELL' : 'WAIT',
-      entry: entry,
-      sl: sl,
-      tp1: tp1,
-      tp2: tp2,
-      rr: rr,
-      confidence: s.confidence || 90,
-      grade: s.setupBadge || 'A+',
-    };
-  }
-  if (mtf.allTimeframesAnalyzed === undefined) {
-    mtf.allTimeframesAnalyzed = true;
-    mtf.htfAnalyzed = true;
-    mtf.mtfAnalyzed = true;
-    mtf.ltfAnalyzed = true;
-  }
-  if (!mtf.alignment) {
-    mtf.alignment = 'Full Multi-Timeframe Confluence';
-  }
-  if (!mtf.crossTimeframeReasoning) {
-    mtf.crossTimeframeReasoning = '4H: Bullish HTF structural demand verified → 1H: Liquidity swept with confirmed displacement & BOS → 15M: MSS & FVG mitigation → FINAL DECISION: BUY';
-  }
-
-  // Ensure Alternative Entry & Sniper Entry ranking
-  if (!s.alternativeEntry) {
-    const range = Math.abs(tp1 - sl) || (entry ? entry * 0.03 : 10);
-    s.alternativeEntry = isBull
-      ? Number((entry - range * 0.08).toFixed(4))
-      : Number((entry + range * 0.08).toFixed(4));
-  }
-
-  if (s.aplusSmc?.sniperEntry) {
-    if (!s.aplusSmc.sniperEntry.entryModelRank) {
-      s.aplusSmc.sniperEntry.entryModelRank = 'Priority 1: FVG + Order Block Confluence';
+  // Build and attach 12-Component A+ Confluence Audit if not present
+  if (!s.aplusConfluenceAudit) {
+    const audit = buildAplusConfluenceAudit(s);
+    s.aplusConfluenceAudit = audit;
+    if (s.aplusSmc) {
+      s.aplusSmc.confluenceAudit = audit;
     }
-    s.aplusSmc.sniperEntry.alternativeEntryPrice = s.alternativeEntry;
-  }
-
-  // Build and attach 12-Component A+ Confluence Audit
-  const audit = buildAplusConfluenceAudit(s);
-  s.aplusConfluenceAudit = audit;
-  if (s.aplusSmc) {
-    s.aplusSmc.confluenceAudit = audit;
   }
 
   return s;
@@ -882,262 +616,138 @@ function validateSignalPriceScale(
   } else if (rawBias.includes('BEAR') || rawBias.includes('SHORT') || rawBias.includes('SELL')) {
     signal.bias = 'BEARISH';
   } else {
-    signal.bias = 'BULLISH';
+    signal.bias = 'NEUTRAL';
   }
 
-  // 2. Extract and sanitize entry, stopLoss, takeProfit
+  // Check if analysis explicitly concluded no setup or insufficient evidence
+  const rawStatus = String(signal.setupStatus || '').toUpperCase();
+  const rawQuality = String(signal.chartQuality || '').toUpperCase();
+  const isNoSetupOrInsufficient =
+    rawStatus.includes('NO VALID') ||
+    rawStatus.includes('INSUFFICIENT') ||
+    rawQuality.includes('UNREADABLE') ||
+    signal.setupBadge === 'Avoid' ||
+    signal.setupBadge === 'Rejected / No Setup';
+
+  // 2. Extract numeric prices
   const entry = parseNumericPrice(signal.entry ?? signal.entryPrice ?? signal.entry_price ?? signal.entryLevel);
-  let sl = parseNumericPrice(signal.stopLoss ?? signal.sl ?? signal.stop_loss ?? signal.stopPrice);
-  let tp = parseNumericPrice(signal.takeProfit ?? signal.tp ?? signal.tp1 ?? signal.takeProfit1 ?? signal.take_profit ?? (Array.isArray(signal.takeProfits) ? signal.takeProfits[0] : undefined));
-  let tp2 = parseNumericPrice(signal.takeProfit2 ?? signal.tp2 ?? signal.takeProfit_2 ?? (Array.isArray(signal.takeProfits) ? signal.takeProfits[1] : undefined));
-  let tp3 = parseNumericPrice(signal.takeProfit3 ?? signal.tp3 ?? signal.takeProfit_3 ?? (Array.isArray(signal.takeProfits) ? signal.takeProfits[2] : undefined));
-  let altEntry = parseNumericPrice(signal.alternativeEntry ?? signal.altEntry ?? signal.secondaryEntry);
+  const sl = parseNumericPrice(signal.stopLoss ?? signal.sl ?? signal.stop_loss ?? signal.stopPrice);
+  const tp = parseNumericPrice(signal.takeProfit ?? signal.tp ?? signal.tp1 ?? signal.takeProfit1 ?? signal.take_profit ?? (Array.isArray(signal.takeProfits) ? signal.takeProfits[0] : undefined));
+  const tp2 = parseNumericPrice(signal.takeProfit2 ?? signal.tp2 ?? signal.takeProfit_2 ?? (Array.isArray(signal.takeProfits) ? signal.takeProfits[1] : undefined));
+  const tp3 = parseNumericPrice(signal.takeProfit3 ?? signal.tp3 ?? signal.takeProfit_3 ?? (Array.isArray(signal.takeProfits) ? signal.takeProfits[2] : undefined));
+  const altEntry = parseNumericPrice(signal.alternativeEntry ?? signal.altEntry ?? signal.secondaryEntry);
 
-  if (isNaN(entry) || entry <= 0) {
-    return {
-      valid: false,
-      reason: 'PRICE SCALE VALIDATION FAILED — Generated trade levels (Entry, Stop Loss, Take Profit) must be positive numerical prices.',
-    };
+  if (isNoSetupOrInsufficient || isNaN(entry) || entry <= 0) {
+    // Legitimate negative determination - do NOT invent mock prices
+    signal.entry = !isNaN(entry) && entry > 0 ? entry : null;
+    signal.stopLoss = !isNaN(sl) && sl > 0 ? sl : null;
+    signal.takeProfit = !isNaN(tp) && tp > 0 ? tp : null;
+    signal.takeProfit2 = !isNaN(tp2) && tp2 > 0 ? tp2 : null;
+    signal.takeProfit3 = !isNaN(tp3) && tp3 > 0 ? tp3 : null;
+    signal.alternativeEntry = !isNaN(altEntry) && altEntry > 0 ? altEntry : null;
+    signal.riskReward = 'N/A';
+    signal.setupStatus = rawQuality.includes('UNREADABLE') ? 'INSUFFICIENT EVIDENCE' : (signal.setupStatus || 'NO VALID SETUP');
+    signal.setupBadge = 'Avoid';
+
+    // Compute genuine audit without synthetic fallbacks
+    const audit = buildAplusConfluenceAudit(signal);
+    signal.aplusConfluenceAudit = audit;
+    if (signal.aplusSmc) {
+      signal.aplusSmc.confluenceAudit = audit;
+    }
+    return { valid: true };
   }
 
+  // A trade setup IS proposed with numeric entry: validate all levels strictly
   signal.entry = entry;
   if (!isNaN(altEntry) && altEntry > 0) signal.alternativeEntry = altEntry;
 
-  // If SL or TP were missing/zero, synthesize institutional default buffer
   if (isNaN(sl) || sl <= 0) {
-    sl = signal.bias === 'BULLISH' ? Number((entry * 0.985).toFixed(4)) : Number((entry * 1.015).toFixed(4));
+    return {
+      valid: false,
+      reason: 'STRUCTURAL INVALIDATION FAILED — Proposed setup requires a genuine Stop Loss anchored to visible chart structure.',
+    };
   }
-  if (isNaN(tp) || tp <= 0) {
-    tp = signal.bias === 'BULLISH' ? Number((entry * 1.035).toFixed(4)) : Number((entry * 0.965).toFixed(4));
-  }
+  signal.stopLoss = sl;
 
-  // 3. Directional check and correction
+  if (isNaN(tp) || tp <= 0) {
+    return {
+      valid: false,
+      reason: 'TARGET VALIDATION FAILED — Proposed setup requires a genuine Take Profit target anchored to visible chart liquidity.',
+    };
+  }
+  signal.takeProfit = tp;
+  if (!isNaN(tp2) && tp2 > 0) signal.takeProfit2 = tp2;
+  if (!isNaN(tp3) && tp3 > 0) signal.takeProfit3 = tp3;
+
+  // 3. Strict Directional Verification (NO synthetic price correction)
   if (signal.bias === 'BULLISH') {
     if (sl >= entry) {
-      sl = Number((entry - Math.abs(entry * 0.012)).toFixed(4));
+      return {
+        valid: false,
+        reason: `DIRECTIONAL CONFLICT — Bullish setup requires Stop Loss (${sl}) to be strictly below Entry (${entry}).`,
+      };
     }
     if (tp <= entry) {
-      tp = Number((entry + Math.abs(entry * 0.028)).toFixed(4));
+      return {
+        valid: false,
+        reason: `DIRECTIONAL CONFLICT — Bullish setup requires Take Profit (${tp}) to be strictly above Entry (${entry}).`,
+      };
     }
-    if (isNaN(tp2) || tp2 <= tp) {
-      tp2 = Number((tp + Math.abs(entry * 0.02)).toFixed(4));
-    }
-    if (isNaN(tp3) || tp3 <= tp2) {
-      tp3 = Number((tp2 + Math.abs(entry * 0.03)).toFixed(4));
-    }
-  } else {
-    // BEARISH
+  } else if (signal.bias === 'BEARISH') {
     if (sl <= entry) {
-      sl = Number((entry + Math.abs(entry * 0.012)).toFixed(4));
+      return {
+        valid: false,
+        reason: `DIRECTIONAL CONFLICT — Bearish setup requires Stop Loss (${sl}) to be strictly above Entry (${entry}).`,
+      };
     }
     if (tp >= entry) {
-      tp = Number((entry - Math.abs(entry * 0.028)).toFixed(4));
-    }
-    if (isNaN(tp2) || tp2 >= tp) {
-      tp2 = Number((tp - Math.abs(entry * 0.02)).toFixed(4));
-    }
-    if (isNaN(tp3) || tp3 >= tp2) {
-      tp3 = Number((tp2 - Math.abs(entry * 0.03)).toFixed(4));
+      return {
+        valid: false,
+        reason: `DIRECTIONAL CONFLICT — Bearish setup requires Take Profit (${tp}) to be strictly below Entry (${entry}).`,
+      };
     }
   }
 
-  signal.stopLoss = sl;
-  signal.takeProfit = tp;
-  signal.takeProfit2 = tp2;
-  signal.takeProfit3 = tp3;
+  // 4. Genuine Mathematical Risk-to-Reward calculation
+  const risk = Math.abs(entry - sl);
+  const reward = Math.abs(tp - entry);
+  const calculatedRR = risk > 0 ? `1 : ${(reward / risk).toFixed(2)}` : 'N/A';
+  signal.riskReward = calculatedRR;
 
-  // 4. Validate and calibrate price scale
+  // 5. Price Axis Scale verification
   let scale = signal.priceAxisScale;
   let minP = scale ? parseNumericPrice(scale.minVisiblePrice) : NaN;
   let maxP = scale ? parseNumericPrice(scale.maxVisiblePrice) : NaN;
   let currP = scale ? parseNumericPrice(scale.currentVisiblePrice) : NaN;
 
-  if (isNaN(minP) || isNaN(maxP) || minP <= 0 || maxP <= minP) {
-    const allPrices = [entry, sl, tp, tp2, tp3].filter(n => !isNaN(n) && n > 0);
-    const minVal = Math.min(...allPrices);
-    const maxVal = Math.max(...allPrices);
-    const range = maxVal - minVal || minVal * 0.04;
-    minP = Number((minVal - range * 0.2).toFixed(4));
-    maxP = Number((maxVal + range * 0.2).toFixed(4));
-    currP = entry;
-
-    signal.priceAxisScale = {
-      minVisiblePrice: minP,
-      maxVisiblePrice: maxP,
-      currentVisiblePrice: currP,
-      isAxisReadable: true,
-      confidenceInPriceReading: 90,
-      priceAxisLabelsFound: [String(minP), String(entry), String(maxP)],
-      notes: 'Price scale auto-aligned with institutional structure.',
-    };
-  } else {
+  if (!isNaN(minP) && !isNaN(maxP) && minP > 0 && maxP > minP) {
     signal.priceAxisScale.minVisiblePrice = minP;
     signal.priceAxisScale.maxVisiblePrice = maxP;
     signal.priceAxisScale.currentVisiblePrice = isNaN(currP) ? entry : currP;
-  }
+    signal.priceAxisScale.isAxisReadable = true;
 
-  // 5. Compute mathematical Risk-to-Reward
-  const risk = Math.abs(entry - sl);
-  const reward = Math.abs(tp - entry);
-  const calculatedRR = risk > 0 ? `1 : ${(reward / risk).toFixed(2)}` : '1 : 2.50';
-  signal.riskReward = calculatedRR;
-
-  // 6. Ensure A+ SMC Sequence Structure
-  const isBull = signal.bias === 'BULLISH';
-  const range = maxP - minP || entry * 0.04;
-  const protectedHighLow = isBull
-    ? (parseNumericPrice(signal.marketStructure?.protectedLow) || sl)
-    : (parseNumericPrice(signal.marketStructure?.protectedHigh) || sl);
-  const sweptLevel = isBull
-    ? Number((protectedHighLow - range * 0.02).toFixed(4))
-    : Number((protectedHighLow + range * 0.02).toFixed(4));
-  const inducementLevel = isBull
-    ? Number((entry - range * 0.12).toFixed(4))
-    : Number((entry + range * 0.12).toFixed(4));
-  const htfZoneName = isBull ? 'HTF Demand' : 'HTF Supply';
-  const poiZoneName = isBull ? 'Bullish Order Block (Demand POI)' : 'Bearish Order Block (Supply POI)';
-
-  if (!signal.aplusSmc) {
-    signal.aplusSmc = {
-      direction: isBull ? 'BUY' : 'SELL',
-      setupGrade: signal.setupBadge || 'A+',
-      chartQuality: 'ANALYZABLE',
-      setupStatus: 'A+ CONFIRMED',
-      htfSupplyDemand: {
-        status: 'VALID',
-        type: isBull ? 'HTF Demand' : 'HTF Supply',
-        zoneRange: isBull ? `${sl} - ${entry}` : `${entry} - ${sl}`,
-        upperBoundary: isBull ? entry : sl,
-        lowerBoundary: isBull ? sl : entry,
-        timeframe: 'H4',
-        structuralOrigin: `Origin of major displacement on ${isBull ? 'discount demand' : 'premium supply'} baseline`,
-        notes: `Validated institutional ${htfZoneName} with sustained displacement away.`,
-      },
-      htfMitigation: {
-        status: 'FIRST MITIGATION',
-        entryDepth: 'Mitigated into 50% equilibrium of HTF zone',
-        reactionProduced: 'Immediate impulse rejection leaving structural wick',
-        liquidityPresent: 'Internal liquidity swept prior to rejection impulse',
-      },
-      inducement: {
-        status: 'IDENTIFIED',
-        level: inducementLevel,
-        type: isBull ? 'Minor swing low inducement (early buyers trap)' : 'Minor swing high inducement (early sellers trap)',
-        description: 'Engineered liquidity inducing retail positions before true sweep',
-      },
-      liquiditySweep: {
-        status: 'CONFIRMED',
-        sweptLevel: sweptLevel,
-        sweepType: isBull ? 'Sell-Side Liquidity Sweep' : 'Buy-Side Liquidity Sweep',
-        wickVsBodyClose: 'Wick swept key level; candle body closed back inside structural range',
-        subsequentDelivery: isBull ? 'Sharp bullish displacement candle away' : 'Sharp bearish displacement candle away',
-        rejectionValidation: 'Failed to hold breakout; immediate rejection confirms liquidity capture',
-      },
-      protectedLevel: {
-        type: isBull ? 'PROTECTED LOW' : 'PROTECTED HIGH',
-        price: protectedHighLow,
-        causalConnection: 'High/low directly responsible for executing the liquidity sweep',
-        invalidationRole: `Structural invalidation baseline — a valid ${isBull ? 'bullish' : 'bearish'} setup cannot reclaim this level`,
-      },
-      failureToSwing: {
-        status: 'CONFIRMED',
-        attemptedSwingLevel: isBull ? Number((protectedHighLow + range * 0.08).toFixed(4)) : Number((protectedHighLow - range * 0.08).toFixed(4)),
-        failurePoint: isBull ? Number((protectedHighLow + range * 0.04).toFixed(4)) : Number((protectedHighLow - range * 0.04).toFixed(4)),
-        triggerFailureLowHigh: entry,
-        structuralMechanism: `Price attempted to retest the protected ${isBull ? 'low' : 'high'}, failed to take/hold past it, and broke market structure`,
-      },
-      changeInStateOfDelivery: {
-        status: 'CONFIRMED',
-        shiftType: isBull ? 'Bearish to Bullish' : 'Bullish to Bearish',
-        responsibleCandleStructure: `Confirmed structural displacement closing beyond the failure ${isBull ? 'high' : 'low'}`,
-        breakCloseLevel: entry,
-        detailedSequence: `Liquidity Sweep (${sweptLevel}) → Rejection → Failure To Swing → Break/Close Beyond Failure Level (${entry})`,
-      },
-      poi: {
-        status: 'VALID',
-        type: isBull ? 'Bullish Order Block' : 'Bearish Order Block',
-        priceRange: `${entry} - ${isBull ? (entry - range * 0.06).toFixed(4) : (entry + range * 0.06).toFixed(4)}`,
-        upperLevel: isBull ? entry : (entry + range * 0.06).toFixed(4),
-        lowerLevel: isBull ? (entry - range * 0.06).toFixed(4) : entry,
-        causalConnectionToDeliveryChange: 'Institutional candle responsible for the displacement that generated the Change In State Of Delivery',
-      },
-      poiMitigation: {
-        status: 'CONFIRMED',
-        retracementDepth: 'Price returned into discount/premium FVG & Order Block mitigation zone',
-        reactionConfirmation: 'Clean lower-timeframe rejection confirms active institutional defense',
-        protectedStructureIntact: true,
-      },
-      sniperEntry: {
-        entryPrice: entry,
-        executionTimeframe: '15M',
-        confirmationType: '15M Sub-Structure Shift & Order Block Defense',
-        entryRationale: `Sniper execution taken from mitigated POI following confirmed Change In State Of Delivery`,
-      },
-      stopLoss: {
-        stopLossPrice: sl,
-        bufferAmount: `${Math.abs(entry - sl).toFixed(4)} pts`,
-        structureReference: `Protected ${isBull ? 'Low' : 'High'} (${protectedHighLow})`,
-        rationale: `SL is placed beyond the protected ${isBull ? 'low' : 'high'} because a valid ${isBull ? 'bullish' : 'bearish'} setup should not reclaim and invalidate this protected liquidity origin.`,
-      },
-      takeProfitTargets: {
-        tp1: tp,
-        tp1LiquidityType: isBull ? 'Internal Range Liquidity (Equal Highs)' : 'Internal Range Liquidity (Equal Lows)',
-        tp2: tp2,
-        tp2LiquidityType: isBull ? 'External Range Liquidity (Major Swing High)' : 'External Range Liquidity (Major Swing Low)',
-        tp3: tp3,
-      },
-      calculatedRiskReward: calculatedRR,
-      checklist: [
-        { stepNumber: 1, condition: `HTF ${isBull ? 'Demand' : 'Supply'} Validated`, status: 'CONFIRMED', evidence: `H4 zone with historical displacement` },
-        { stepNumber: 2, condition: `${isBull ? 'Demand' : 'Supply'} Mitigation Detected`, status: 'CONFIRMED', evidence: `First mitigation with clean rejection wick` },
-        { stepNumber: 3, condition: 'Inducement Formed & Identified', status: 'CONFIRMED', evidence: `Trap level engineered at ${inducementLevel}` },
-        { stepNumber: 4, condition: 'Liquidity Sweep Confirmed', status: 'CONFIRMED', evidence: `Wick swept liquidity at ${sweptLevel} with rejection` },
-        { stepNumber: 5, condition: `Protected ${isBull ? 'Low' : 'High'} Established`, status: 'CONFIRMED', evidence: `Level anchored at ${protectedHighLow}` },
-        { stepNumber: 6, condition: 'Failure To Swing Confirmed', status: 'CONFIRMED', evidence: `Retest failed to breach protected level` },
-        { stepNumber: 7, condition: 'Change In State Of Delivery (CSD)', status: 'CONFIRMED', evidence: `Candle closed through failure trigger level` },
-        { stepNumber: 8, condition: 'Causal POI Identified', status: 'CONFIRMED', evidence: `${poiZoneName} at origin of CSD` },
-        { stepNumber: 9, condition: 'POI Mitigation Verified', status: 'CONFIRMED', evidence: `Price pulled back into POI with reaction` },
-        { stepNumber: 10, condition: '15M Lower-Timeframe Sniper Entry', status: 'CONFIRMED', evidence: `Entry executed at ${entry}` },
-        { stepNumber: 11, condition: `SL Beyond Protected Structure`, status: 'CONFIRMED', evidence: `SL positioned at ${sl} with structure buffer` },
-        { stepNumber: 12, condition: 'Liquidity-Based Take Profit', status: 'CONFIRMED', evidence: `TP1 at ${tp} targeting internal pool, TP2 at ${tp2}` },
-        { stepNumber: 13, condition: 'Mathematical Risk-to-Reward Verified', status: 'CONFIRMED', evidence: `Strict ${calculatedRR} R:R calculated directly` },
-      ],
-      missingConditions: [],
-      causalReasoningSequence: [
-        `1. Price interacted with genuine HTF ${isBull ? 'Demand' : 'Supply'} on the higher timeframe.`,
-        `2. Initial reaction produced displacement and mitigated the HTF zone.`,
-        `3. Inducement was engineered at ${inducementLevel} to trap early ${isBull ? 'buyers' : 'sellers'}.`,
-        `4. Price swept resting liquidity at ${sweptLevel} with immediate wick rejection.`,
-        `5. The sweep established the Protected ${isBull ? 'Low' : 'High'} at ${protectedHighLow}.`,
-        `6. Price attempted to swing back towards the protected level but failed to sustain/break it (Failure To Swing).`,
-        `7. Price broke through the structural trigger level, confirming Change In State Of Delivery (CSD).`,
-        `8. The delivery change generated a validated ${isBull ? 'Bullish' : 'Bearish'} POI (Order Block / FVG).`,
-        `9. Price retraced back into the POI and executed clean mitigation.`,
-        `10. Sniper entry was executed at ${entry} on 15M confirmation.`,
-        `11. Stop Loss was secured at ${sl} beyond the protected structure.`,
-        `12. Take profit targets (TP1: ${tp}, TP2: ${tp2}) target actual chart-derived liquidity pools.`,
-        `13. Risk-to-Reward ratio of ${calculatedRR} satisfies institutional asymmetric edge criteria.`,
-      ],
+    // Check if entry price is within reasonable range of visible chart axis
+    const tolerance = (maxP - minP) * 0.35;
+    if (entry < minP - tolerance || entry > maxP + tolerance) {
+      return {
+        valid: false,
+        reason: `PRICE SCALE DISCREPANCY — Entry price (${entry}) falls outside visible chart price range (${minP} - ${maxP}). Ensure all levels are read directly from chart axis.`,
+      };
+    }
+  } else {
+    // If scale couldn't be accurately read, record honest status
+    signal.priceAxisScale = {
+      minVisiblePrice: null,
+      maxVisiblePrice: null,
+      currentVisiblePrice: entry,
+      isAxisReadable: false,
+      confidenceInPriceReading: signal.priceAxisScale?.confidenceInPriceReading || 40,
+      notes: signal.priceAxisScale?.notes || 'Price axis labels not clearly delineated; levels estimated from visible candle range.',
     };
   }
 
-  // Ensure Alternative Entry & Sniper Entry model ranking
-  if (!signal.alternativeEntry) {
-    const rangeVal = Math.abs(tp - sl) || entry * 0.03;
-    signal.alternativeEntry = isBull
-      ? Number((entry - rangeVal * 0.08).toFixed(4))
-      : Number((entry + rangeVal * 0.08).toFixed(4));
-  }
-
-  if (signal.aplusSmc?.sniperEntry) {
-    signal.aplusSmc.sniperEntry.entryPrice = entry;
-    signal.aplusSmc.sniperEntry.alternativeEntryPrice = signal.alternativeEntry;
-    if (!signal.aplusSmc.sniperEntry.entryModelRank) {
-      signal.aplusSmc.sniperEntry.entryModelRank = 'Priority 1: FVG + Order Block Confluence';
-    }
-  }
-
-  // Compute and attach 12-Component A+ Confluence Audit
+  // 6. Compute genuine 12-Component A+ Confluence Audit
   const audit = buildAplusConfluenceAudit(signal);
   signal.aplusConfluenceAudit = audit;
   if (signal.aplusSmc) {
@@ -1150,10 +760,11 @@ function validateSignalPriceScale(
     signal.setupBadge = audit.grade;
   } else {
     signal.setupStatus = signal.setupStatus || 'A+ CONFIRMED';
+    signal.setupBadge = audit.grade || 'A+';
   }
 
-  // 7. Calibrate annotations to visible price scale
-  if (Array.isArray(signal.annotations)) {
+  // 7. Calibrate annotations to visible price scale if scale is confirmed
+  if (Array.isArray(signal.annotations) && !isNaN(minP) && !isNaN(maxP) && maxP > minP) {
     for (const ann of signal.annotations) {
       const annPrice = parseNumericPrice(ann.price);
       if (!isNaN(annPrice)) {
@@ -1299,397 +910,6 @@ function validateMultiTimeframeSignal(
       'WAIT — LOWER TIMEFRAME PENDING: 15M entry confirmation (MSS/CHoCH, displacement) has not yet triggered.'
     );
   }
-}
-
-function synthesizeInstitutionalSignal(
-  asset: string,
-  assetClass: string,
-  timeframe: string,
-  strategy: string,
-  accountBalance: number,
-  riskPercent: number,
-  svgContext: string,
-  isMulti: boolean,
-  htfChart?: any,
-  mtfChart?: any,
-  ltfChart?: any,
-  timeframeMismatchNotice?: string
-): any {
-  let minP = NaN;
-  let maxP = NaN;
-  let currP = NaN;
-
-  if (svgContext) {
-    const numMatches = svgContext.match(/\d+[\d,.]*\d+/g);
-    if (numMatches) {
-      const parsedNums = numMatches
-        .map(n => parseNumericPrice(n))
-        .filter(n => !isNaN(n) && n > 0 && n < 10000000);
-      if (parsedNums.length >= 3) {
-        parsedNums.sort((a, b) => a - b);
-        minP = parsedNums[0];
-        maxP = parsedNums[parsedNums.length - 1];
-        currP = parsedNums[Math.floor(parsedNums.length / 2)];
-      }
-    }
-  }
-
-  if (isNaN(currP) || currP <= 0) {
-    const sym = (asset || '').toUpperCase();
-    if (sym.includes('BTC')) { currP = 105250; minP = 104500; maxP = 107200; }
-    else if (sym.includes('ETH')) { currP = 3620; minP = 3540; maxP = 3780; }
-    else if (sym.includes('SOL')) { currP = 225.5; minP = 215.0; maxP = 240.0; }
-    else if (sym.includes('XAU') || sym.includes('GOLD')) { currP = 4594.5; minP = 4550.0; maxP = 4680.0; }
-    else if (sym.includes('EUR')) { currP = 1.0895; minP = 1.0820; maxP = 1.0980; }
-    else if (sym.includes('GBP')) { currP = 1.2850; minP = 1.2780; maxP = 1.2960; }
-    else if (sym.includes('JPY')) { currP = 154.20; minP = 152.80; maxP = 156.00; }
-    else if (sym.includes('NAS') || sym.includes('100')) { currP = 21450; minP = 21100; maxP = 21850; }
-    else if (sym.includes('US30') || sym.includes('DOW')) { currP = 44200; minP = 43800; maxP = 44800; }
-    else { currP = 100.0; minP = 95.0; maxP = 110.0; }
-  }
-
-  const range = maxP - minP || currP * 0.03;
-  const isBull = true;
-  const bias = isBull ? 'BULLISH' : 'BEARISH';
-  const entry = Number(currP.toFixed(4));
-  const sl = Number((isBull ? entry - range * 0.25 : entry + range * 0.25).toFixed(4));
-  const tp1 = Number((isBull ? entry + range * 0.65 : entry - range * 0.65).toFixed(4));
-  const tp2 = Number((isBull ? entry + range * 1.10 : entry - range * 1.10).toFixed(4));
-  const tp3 = Number((isBull ? entry + range * 1.70 : entry - range * 1.70).toFixed(4));
-  const altEntry = Number((isBull ? entry - range * 0.10 : entry + range * 0.10).toFixed(4));
-
-  const protectedLevel = isBull ? sl : sl;
-  const sweptLevel = isBull ? Number((sl - range * 0.03).toFixed(4)) : Number((sl + range * 0.03).toFixed(4));
-  const inducementLevel = isBull ? Number((entry - range * 0.12).toFixed(4)) : Number((entry + range * 0.12).toFixed(4));
-
-  const maxLoss = Number(((accountBalance * riskPercent) / 100).toFixed(2));
-  const expProfit = Number(((accountBalance * riskPercent * 2.6) / 100).toFixed(2));
-  const riskRewardRatio = '1 : 2.60';
-
-  const hasHtf = Boolean(htfChart?.imageBase64);
-  const hasMtf = Boolean(mtfChart?.imageBase64);
-  const hasLtf = Boolean(ltfChart?.imageBase64);
-  const allTfsPresent = isMulti ? hasHtf && hasMtf && hasLtf : true;
-
-  const htfTf = htfChart?.timeframe || '4H';
-  const mtfTf = mtfChart?.timeframe || '1H';
-  const ltfTf = ltfChart?.timeframe || '15M';
-
-  const resObj: any = {
-    bias,
-    entry,
-    alternativeEntry: altEntry,
-    stopLoss: sl,
-    takeProfit: tp1,
-    takeProfit2: tp2,
-    takeProfit3: tp3,
-    confidence: 93,
-    session: 'New York (Killzone)',
-    chartQuality: 'ANALYZABLE',
-    setupStatus: 'A+ CONFIRMED',
-    setupBadge: 'A+',
-    priceAxisScale: {
-      minVisiblePrice: Number(minP.toFixed(4)),
-      maxVisiblePrice: Number(maxP.toFixed(4)),
-      currentVisiblePrice: entry,
-      isAxisReadable: true,
-      confidenceInPriceReading: 96,
-      priceAxisLabelsFound: [String(minP), String(entry), String(maxP)],
-      notes: 'Price scale verified directly against institutional order flow matrix.',
-    },
-    marketStructure: {
-      trend: isBull ? 'Uptrend' : 'Downtrend',
-      structure: isBull ? 'Bullish Change In State Of Delivery (CSD)' : 'Bearish Change In State Of Delivery (CSD)',
-      swingHigh: String(maxP),
-      swingLow: String(minP),
-      protectedHigh: isBull ? String(tp3) : String(sl),
-      protectedLow: isBull ? String(sl) : String(minP),
-      bos: true,
-      choch: true,
-    },
-    smcIct: {
-      bos: `Confirmed ${timeframe} Break of Structure following liquidity sweep`,
-      choch: `Change in State of Delivery (CSD) shifting order flow to ${bias}`,
-      fvg: `${timeframe} ${isBull ? 'Bullish' : 'Bearish'} Fair Value Gap holding mitigation`,
-      orderBlocks: `${timeframe} Institutional ${isBull ? 'Demand' : 'Supply'} Order Block`,
-      liquidity: isBull ? 'Sell-side liquidity swept at lows; Buy-side liquidity targeted' : 'Buy-side liquidity swept at highs; Sell-side liquidity targeted',
-      zone: isBull ? 'Discount (Institutional Demand)' : 'Premium (Institutional Supply)',
-      supplyDemand: isBull ? 'Institutional Demand Zone Reaction' : 'Institutional Supply Zone Reaction',
-      imbalances: 'Single print liquidity void filled cleanly before displacement',
-    },
-    aplusSmc: {
-      direction: isBull ? 'BUY' : 'SELL',
-      setupGrade: 'A+',
-      chartQuality: 'ANALYZABLE',
-      setupStatus: 'A+ CONFIRMED',
-      htfSupplyDemand: {
-        status: 'VALID',
-        type: isBull ? 'HTF Demand' : 'HTF Supply',
-        zoneRange: `${minP} - ${isBull ? (minP + range * 0.3).toFixed(4) : (maxP - range * 0.3).toFixed(4)}`,
-        upperBoundary: isBull ? (minP + range * 0.3).toFixed(4) : maxP,
-        lowerBoundary: isBull ? minP : (maxP - range * 0.3).toFixed(4),
-        timeframe: 'H4',
-        structuralOrigin: `Origin of major ${isBull ? 'bullish displacement on H4 demand' : 'bearish displacement on H4 supply'}`,
-        notes: `Validated HTF ${isBull ? 'Demand' : 'Supply'} zone with high institutional volume signature.`,
-      },
-      htfMitigation: {
-        status: 'FIRST MITIGATION',
-        entryDepth: 'Mitigated into 50% equilibrium of HTF zone',
-        reactionProduced: 'Immediate displacement candle leaving structural wick',
-        liquidityPresent: 'Sell-side and internal liquidity swept during initial tap',
-      },
-      inducement: {
-        status: 'IDENTIFIED',
-        level: inducementLevel,
-        type: isBull ? 'Minor swing low inducement (early buyers trap)' : 'Minor swing high inducement (early sellers trap)',
-        description: 'Engineered liquidity inducing early retail entries before true sweep event',
-      },
-      liquiditySweep: {
-        status: 'CONFIRMED',
-        sweptLevel: sweptLevel,
-        sweepType: isBull ? 'Sell-Side Liquidity Sweep' : 'Buy-Side Liquidity Sweep',
-        wickVsBodyClose: 'Wick swept key structural liquidity level; body closed cleanly back inside range',
-        subsequentDelivery: `Vigorous ${isBull ? 'bullish' : 'bearish'} displacement confirming institutional absorption`,
-        rejectionValidation: 'Failed breakout with immediate sharp reversal back inside range',
-      },
-      protectedLevel: {
-        type: isBull ? 'PROTECTED LOW' : 'PROTECTED HIGH',
-        price: sl,
-        causalConnection: 'High/low responsible for executing the decisive liquidity sweep',
-        invalidationRole: `Structural invalidation — a valid ${bias} setup MUST NOT breach this level`,
-      },
-      failureToSwing: {
-        status: 'CONFIRMED',
-        attemptedSwingLevel: isBull ? Number((sl + range * 0.08).toFixed(4)) : Number((sl - range * 0.08).toFixed(4)),
-        failurePoint: isBull ? Number((sl + range * 0.04).toFixed(4)) : Number((sl - range * 0.04).toFixed(4)),
-        triggerFailureLowHigh: entry,
-        structuralMechanism: `Price attempted to test protected ${isBull ? 'low' : 'high'}, failed to hold/take below/above, and closed beyond failure trigger low/high`,
-      },
-      changeInStateOfDelivery: {
-        status: 'CONFIRMED',
-        shiftType: isBull ? 'Bearish to Bullish' : 'Bullish to Bearish',
-        responsibleCandleStructure: `Displacement candle closing beyond failure trigger level at ${entry}`,
-        breakCloseLevel: entry,
-        detailedSequence: `Liquidity Sweep (${sweptLevel}) → Rejection → Failure To Swing → Break/Close Beyond Failure Level (${entry})`,
-      },
-      poi: {
-        status: 'VALID',
-        type: isBull ? 'Bullish Order Block' : 'Bearish Order Block',
-        priceRange: `${entry} - ${isBull ? (entry - range * 0.06).toFixed(4) : (entry + range * 0.06).toFixed(4)}`,
-        upperLevel: isBull ? entry : (entry + range * 0.06).toFixed(4),
-        lowerLevel: isBull ? (entry - range * 0.06).toFixed(4) : entry,
-        causalConnectionToDeliveryChange: 'Institutional origin candle that produced the displacement and Change In State Of Delivery',
-      },
-      poiMitigation: {
-        status: 'CONFIRMED',
-        retracementDepth: 'Controlled pullback mitigating the unmitigated POI order block',
-        reactionConfirmation: 'Sub-structure shift on 15M confirming entry trigger',
-        protectedStructureIntact: true,
-      },
-      sniperEntry: {
-        entryPrice: entry,
-        alternativeEntryPrice: altEntry,
-        entryModelRank: 'Priority 1: FVG + Order Block Confluence',
-        executionTimeframe: '15M',
-        confirmationType: '15M Sub-Structure Shift & Order Block Defense',
-        entryRationale: `Sniper entry executed from mitigated POI following confirmed Change In State Of Delivery`,
-      },
-      stopLoss: {
-        stopLossPrice: sl,
-        bufferAmount: `${Math.abs(entry - sl).toFixed(4)} pts`,
-        structureReference: `Protected ${isBull ? 'Low' : 'High'} (${sl})`,
-        rationale: `SL is placed beyond the protected ${isBull ? 'low' : 'high'} (${sl}) because a valid ${isBull ? 'bullish' : 'bearish'} setup should not reclaim and invalidate this protected liquidity origin.`,
-      },
-      takeProfitTargets: {
-        tp1: tp1,
-        tp1LiquidityType: isBull ? 'Internal Range Liquidity (Equal Highs)' : 'Internal Range Liquidity (Equal Lows)',
-        tp2: tp2,
-        tp2LiquidityType: isBull ? 'External Range Liquidity (Major Swing High)' : 'External Range Liquidity (Major Swing Low)',
-        tp3: tp3,
-      },
-      calculatedRiskReward: riskRewardRatio,
-      checklist: [
-        { stepNumber: 1, condition: `HTF ${isBull ? 'Demand' : 'Supply'} Validated`, status: 'CONFIRMED', evidence: `H4 zone with proven institutional displacement` },
-        { stepNumber: 2, condition: `${isBull ? 'Demand' : 'Supply'} Mitigation Detected`, status: 'CONFIRMED', evidence: `First mitigation with clean wick rejection` },
-        { stepNumber: 3, condition: 'Inducement Formed & Identified', status: 'CONFIRMED', evidence: `Trap level engineered at ${inducementLevel}` },
-        { stepNumber: 4, condition: 'Liquidity Sweep Confirmed', status: 'CONFIRMED', evidence: `Wick swept resting liquidity at ${sweptLevel}` },
-        { stepNumber: 5, condition: `Protected ${isBull ? 'Low' : 'High'} Established`, status: 'CONFIRMED', evidence: `Level anchored at ${sl}` },
-        { stepNumber: 6, condition: 'Failure To Swing Confirmed', status: 'CONFIRMED', evidence: `Retest failed to breach protected level` },
-        { stepNumber: 7, condition: 'Change In State Of Delivery (CSD)', status: 'CONFIRMED', evidence: `Displacement closed through failure trigger level` },
-        { stepNumber: 8, condition: 'Causal POI Identified', status: 'CONFIRMED', evidence: `${isBull ? 'Bullish' : 'Bearish'} Order Block at origin of CSD` },
-        { stepNumber: 9, condition: 'POI Mitigation Verified', status: 'CONFIRMED', evidence: `Price pulled back into POI with active reaction` },
-        { stepNumber: 10, condition: '15M Lower-Timeframe Sniper Entry', status: 'CONFIRMED', evidence: `Entry executed at ${entry}` },
-        { stepNumber: 11, condition: `SL Beyond Protected Structure`, status: 'CONFIRMED', evidence: `SL positioned at ${sl} with structure buffer` },
-        { stepNumber: 12, condition: 'Liquidity-Based Take Profit', status: 'CONFIRMED', evidence: `TP1 at ${tp1} targeting internal liquidity, TP2 at ${tp2}` },
-        { stepNumber: 13, condition: 'Mathematical Risk-to-Reward Verified', status: 'CONFIRMED', evidence: `Strict ${riskRewardRatio} R:R calculated directly` },
-      ],
-      missingConditions: [],
-      causalReasoningSequence: [
-        `1. Price interacted with genuine HTF ${isBull ? 'Demand' : 'Supply'} on the higher timeframe.`,
-        `2. Initial reaction produced displacement and mitigated the HTF zone.`,
-        `3. Inducement was engineered at ${inducementLevel} to trap early ${isBull ? 'buyers' : 'sellers'}.`,
-        `4. Price swept resting liquidity at ${sweptLevel} with immediate wick rejection.`,
-        `5. The sweep established the Protected ${isBull ? 'Low' : 'High'} at ${sl}.`,
-        `6. Price attempted to swing back towards the protected level but failed to sustain/break it (Failure To Swing).`,
-        `7. Price broke through the structural trigger level, confirming Change In State Of Delivery (CSD).`,
-        `8. The delivery change generated a validated ${isBull ? 'Bullish' : 'Bearish'} POI (Order Block / FVG).`,
-        `9. Price retraced back into the POI and executed clean mitigation.`,
-        `10. Sniper entry was executed at ${entry} on 15M confirmation.`,
-        `11. Stop Loss was secured at ${sl} beyond the protected structure.`,
-        `12. Take profit targets (TP1: ${tp1}, TP2: ${tp2}) target actual chart-derived liquidity pools.`,
-        `13. Risk-to-Reward ratio of ${riskRewardRatio} satisfies institutional asymmetric edge criteria.`,
-      ],
-    },
-    volatility: {
-      atr: 'Dynamic Volatility ATR Expansion',
-      dailyRange: 'Normal to Elevated Expansion',
-      sessionVolatility: 'Optimal Trend Continuation',
-    },
-    riskManagement: {
-      riskPercent,
-      lotSize: 'Auto-Calculated',
-      positionSize: `$${accountBalance}`,
-      maximumLoss: `$${maxLoss}`,
-      expectedProfit: `$${expProfit}`,
-      riskRewardRatio: riskRewardRatio,
-    },
-    multiTimeframe: {
-      htfAnalyzed: isMulti ? hasHtf : true,
-      mtfAnalyzed: isMulti ? hasMtf : true,
-      ltfAnalyzed: isMulti ? hasLtf : true,
-      allTimeframesAnalyzed: allTfsPresent,
-      overallBias: allTfsPresent ? (isBull ? 'BULLISH' : 'BEARISH') : 'NEUTRAL',
-      htfTrend: isBull ? 'BULLISH' : 'BEARISH',
-      mtfStructure: isBull ? 'BULLISH' : 'BEARISH',
-      ltfConfirmation: isBull ? 'BULLISH' : 'BEARISH',
-      alignment: allTfsPresent ? 'Full Multi-Timeframe Confluence' : 'Incomplete Evidence',
-      crossTimeframeReasoning: allTfsPresent
-        ? `${htfTf}: Bullish HTF structural demand verified → ${mtfTf}: Liquidity swept with confirmed displacement & BOS → ${ltfTf}: 15M MSS & FVG mitigation → FINAL DECISION: BUY`
-        : 'WAIT: Multi-timeframe analysis requires independent analysis across all three timeframes (4H, 1H, 15M).',
-      timeframeMismatchNotice: timeframeMismatchNotice || undefined,
-      higherTimeframe: {
-        analyzed: isMulti ? hasHtf : true,
-        timeframe: htfTf,
-        bias: isBull ? 'BULLISH' : 'BEARISH',
-        structure: `Major ${htfTf} structural order flow holding protected demand above key swing low.`,
-        liquidity: 'Major buy-side liquidity pool resting above external equal highs.',
-        poi: `${htfTf} Institutional Demand Zone located in deep discount pricing.`,
-        swingHigh: Number((currP + range * 1.4).toFixed(4)),
-        swingLow: Number((currP - range * 0.4).toFixed(4)),
-        protectedLevel: `${sl}`,
-        premiumDiscount: 'Discount Zone (< 50% Equilibrium)',
-        notes: `${htfTf} context establishes primary institutional directional filter.`,
-        timeframeMismatchFlag: false,
-      },
-      middleTimeframe: {
-        analyzed: isMulti ? hasMtf : true,
-        timeframe: mtfTf,
-        bias: isBull ? 'BULLISH' : 'BEARISH',
-        structure: `${mtfTf} structure refined with clean Break of Structure (BOS) confirming demand reaction.`,
-        bosChoch: `Confirmed ${mtfTf} BOS with strong impulse candle body close.`,
-        liquidity: `Internal sell-side liquidity swept at ${sweptLevel} before displacement.`,
-        poi: `${mtfTf} Bullish Order Block & Fair Value Gap unmitigated origin zone.`,
-        displacement: 'Strong expansion candle breaking structural swing high.',
-        alignmentWithHtf: 'Aligned',
-        notes: `${mtfTf} confirms structure without divergence against ${htfTf} bias.`,
-        timeframeMismatchFlag: false,
-      },
-      lowerTimeframe: {
-        analyzed: isMulti ? hasLtf : true,
-        timeframe: ltfTf,
-        confirmation: allTfsPresent ? 'CONFIRMED' : 'DEVELOPING',
-        mssChoch: `Confirmed ${ltfTf} Market Structure Shift (MSS) with displacement close.`,
-        displacement: 'Bullish impulse candle departing from mitigated POI.',
-        fvgOb: `${ltfTf} Fair Value Gap retest & Order Block defense.`,
-        entry: entry,
-        invalidation: sl,
-        shortTermLiquidityTargets: `Targeting internal range liquidity pool at ${tp1}`,
-        notes: `${ltfTf} triggers sniper trade execution.`,
-        timeframeMismatchFlag: false,
-      },
-      finalDecision: {
-        direction: allTfsPresent ? (isBull ? 'BUY' : 'SELL') : 'WAIT',
-        entry: entry,
-        sl: sl,
-        tp1: tp1,
-        tp2: tp2,
-        rr: riskRewardRatio,
-        confidence: allTfsPresent ? 93 : 35,
-        grade: allTfsPresent ? 'A+' : 'Avoid',
-      },
-      perTimeframe: {
-        htf: `${htfTf} macro structural continuation holding key demand`,
-        mtf: `${mtfTf} clean impulse with unmitigated order block defense`,
-        ltf: `${ltfTf} sub-structure shift confirming entry trigger`,
-      },
-    },
-    strategyScores: [
-      { strategy: 'ICT', score: 95, rationale: 'Textbook liquidity run with fair value gap mitigation and CSD.' },
-      { strategy: 'SMC', score: 94, rationale: 'Protected low validation & institutional demand reaction.' },
-      { strategy: 'Price Action', score: 88, rationale: 'Engulfing expansion candle from psychological level.' },
-      { strategy: 'Trend Following', score: 90, rationale: 'Aligned with higher timeframe momentum.' },
-      { strategy: 'Breakout', score: 82, rationale: 'Clean expansion through local resistance structure.' },
-    ],
-    recommendedStrategy: {
-      name: strategy || 'ICT',
-      why: `The setup presents textbook ${strategy || 'ICT'} structural validation and liquidity sweeps.`,
-    },
-    qualityScore: {
-      structure: 95,
-      trend: 92,
-      liquidity: 96,
-      volume: 89,
-      riskReward: 94,
-      volatility: 88,
-      overall: 93,
-      grade: 'A+',
-      explanation: 'Institutional A+ grade setup with confluence of liquidity sweep, protected level, CSD, and 1:2.60 R:R.',
-    },
-    tradeManagement: {
-      moveToBreakEven: `Move Stop Loss to Entry (${entry}) once Take Profit 1 (${tp1}) is achieved.`,
-      partials: 'Lock 50% partial profit at TP1; leave remaining 50% trailing to TP2 & TP3.',
-      earlyExit: `Close position manually if candle closes beyond invalidation level (${sl}).`,
-      avoidIf: 'Avoid execution if high-impact macroeconomic news is scheduled within 10 minutes.',
-    },
-    explanation: {
-      whySelected: `Institutional ${bias} A+ SMC order flow structure verified with multi-timeframe confluence.`,
-      supportingConditions: [
-        'Market order flow aligned with higher timeframe trend and HTF zone',
-        'Clean sell-side liquidity sweep completed prior to displacement',
-        'Failure To Swing and Change In State Of Delivery confirmed',
-        'Discount zone pricing providing asymmetrical risk/reward',
-      ],
-      strongestSignals: [
-        'Confirmed Liquidity Sweep with wick rejection',
-        'Protected High/Low structure holding firm',
-        'Change In State Of Delivery (CSD) confirmed',
-        'Reaction from validated institutional Order Block / Demand zone',
-      ],
-      invalidationRisks: [
-        `Sustained candle close beyond protected structure at ${sl}`,
-        'Unexpected high-impact macroeconomic headline release',
-      ],
-    },
-    reasoning: [
-      `Institutional ${bias} A+ setup validated on ${timeframe} timeframe.`,
-      `Liquidity pool swept at ${sweptLevel} followed by confirmed Change In State Of Delivery.`,
-      `Order block mitigation at ${entry} offering pristine risk-defined entry with SL at ${sl}.`,
-    ],
-    annotations: [
-      { type: 'Entry', x: 20, y: 50, x2: 95, y2: 50, label: `Entry: ${entry}`, color: '#10b981', price: entry },
-      { type: 'Stop Loss', x: 20, y: 72, x2: 95, y2: 72, label: `SL (Protected): ${sl}`, color: '#f43f5e', price: sl },
-      { type: 'Take Profit', x: 20, y: 24, x2: 95, y2: 24, label: `TP1 (Internal): ${tp1}`, color: '#10b981', price: tp1 },
-      { type: 'Take Profit 2', x: 20, y: 14, x2: 95, y2: 14, label: `TP2 (External): ${tp2}`, color: '#34d399', price: tp2 },
-      { type: 'Protected Low', x: 18, y: 72, x2: 60, y2: 72, label: `Protected Low: ${sl}`, color: '#fbbf24', price: sl },
-      { type: 'Liquidity Sweep', x: 22, y: 76, x2: 45, y2: 76, label: `Sweep: ${sweptLevel}`, color: '#f59e0b', price: sweptLevel },
-      { type: 'Inducement', x: 25, y: 58, x2: 50, y2: 58, label: `Inducement: ${inducementLevel}`, color: '#94a3b8', price: inducementLevel },
-      { type: 'Change In State Of Delivery', x: 35, y: 48, x2: 70, y2: 48, label: `CSD Confirmed`, color: '#a855f7', price: entry },
-      { type: 'Order Block', x: 28, y: 52, x2: 58, y2: 60, label: `${timeframe} Demand POI`, color: '#818cf8', price: entry },
-      { type: 'FVG', x: 38, y: 44, x2: 65, y2: 52, label: `${timeframe} Bullish FVG`, color: '#38bdf8' },
-    ],
-  };
-
-  return ensureSignalMultiTimeframe(resObj);
 }
 
 // -------------------------------------------------------------
@@ -2118,7 +1338,7 @@ Execute the full 7-pass analysis and return complete JSON.`;
     const candidateModels = [
       'gemini-flash-latest',
       'gemini-3.1-flash-lite',
-      'gemini-3.7-flash',
+      'gemini-3.1-pro-preview',
     ];
     let rawText = '';
     let usedModel = '';
@@ -2126,7 +1346,7 @@ Execute the full 7-pass analysis and return complete JSON.`;
     let highDemandHit = false;
 
     if (ai) {
-      const AI_TOTAL_BUDGET_MS = 14000;
+      const AI_TOTAL_BUDGET_MS = 35000;
       const aiStartTime = Date.now();
 
       // Build structured multimodal contents array
@@ -2177,12 +1397,6 @@ Process the 3 charts below INDEPENDENTLY, then synthesize the final trade decisi
             responseMimeType: 'application/json',
           };
 
-          if (modelCandidate === 'gemini-3.7-flash') {
-            config.thinkingConfig = {
-              thinkingLevel: ThinkingLevel.LOW,
-            };
-          }
-
           const contents = contentParts.length > 0
             ? { parts: contentParts }
             : userText;
@@ -2194,7 +1408,7 @@ Process the 3 charts below INDEPENDENTLY, then synthesize the final trade decisi
           });
 
           const timeoutPromise = new Promise<any>((_, reject) => {
-            const timer = setTimeout(() => reject(new Error('Model generation timed out')), 8000);
+            const timer = setTimeout(() => reject(new Error('Model generation timed out')), 20000);
             modelPromise.finally(() => clearTimeout(timer)).catch(() => {});
           });
 
@@ -2234,21 +1448,90 @@ Process the 3 charts below INDEPENDENTLY, then synthesize the final trade decisi
       try {
         finalSignal = JSON.parse(cleanJson.trim());
       } catch (parseErr) {
-        finalSignal = synthesizeInstitutionalSignal(asset, assetClass, timeframe, strategy, accountBalance, riskPercent, svgContext, isMulti, htfChart, mtfChart, ltfChart, mismatchNotice);
-        usedModel = 'TradeGuard Institutional Engine';
+        const total_ms = Date.now() - t_start;
+        const parseErrorLog = {
+          id: logId,
+          userId,
+          asset,
+          strategy,
+          mode: mode as any,
+          status: 'Failed' as const,
+          decision: 'NEUTRAL' as const,
+          confidence: 0,
+          duration: total_ms,
+          aiStatus: 'Rejected' as const,
+          error: 'INSUFFICIENT EVIDENCE — The AI vision output could not be parsed as structured market analysis.',
+          timings: {
+            auth_ms,
+            image_validation_ms,
+            image_processing_ms,
+            prompt_build_ms,
+            ai_request_ms,
+            ai_parse_ms: Date.now() - t_parse,
+            schema_validation_ms: 0,
+            signal_validation_ms: 0,
+            database_insert_ms: 0,
+            logging_ms: 0,
+            total_ms,
+          },
+          createdAt: new Date().toISOString(),
+        };
+        db.analysisLogs.unshift(parseErrorLog);
+        saveDb();
+
+        return res.status(422).json({
+          success: false,
+          error: 'INSUFFICIENT EVIDENCE — Unable to extract a verifiable structured setup from the uploaded chart. TradeGuard refuses to synthesize fallback trading levels.',
+          setupStatus: 'INSUFFICIENT EVIDENCE',
+        });
       }
     } else {
-      // Direct high-confidence institutional synthesis fallback
-      finalSignal = synthesizeInstitutionalSignal(asset, assetClass, timeframe, strategy, accountBalance, riskPercent, svgContext, isMulti, htfChart, mtfChart, ltfChart, mismatchNotice);
-      usedModel = quotaHit || highDemandHit ? 'TradeGuard Institutional Engine (High-Availability)' : 'TradeGuard Institutional Engine';
+      const total_ms = Date.now() - t_start;
+      const failureReason = quotaHit
+        ? 'Gemini API quota exceeded. TradeGuard strictly refuses to fabricate mock trading signals when upstream vision models are rate-limited.'
+        : highDemandHit
+        ? 'Vision model unavailable due to temporary upstream demand. TradeGuard does not synthesize fallback trading levels.'
+        : 'INSUFFICIENT EVIDENCE — The vision model could not extract valid chart data from the provided image.';
+
+      const statusCode = quotaHit ? 429 : highDemandHit ? 503 : 422;
+
+      const aiErrorLog = {
+        id: logId,
+        userId,
+        asset,
+        strategy,
+        mode: mode as any,
+        status: 'Failed' as const,
+        decision: 'NEUTRAL' as const,
+        confidence: 0,
+        duration: total_ms,
+        aiStatus: 'Rejected' as const,
+        error: failureReason,
+        timings: {
+          auth_ms,
+          image_validation_ms,
+          image_processing_ms,
+          prompt_build_ms,
+          ai_request_ms,
+          ai_parse_ms: Date.now() - t_parse,
+          schema_validation_ms: 0,
+          signal_validation_ms: 0,
+          database_insert_ms: 0,
+          logging_ms: 0,
+          total_ms,
+        },
+        createdAt: new Date().toISOString(),
+      };
+      db.analysisLogs.unshift(aiErrorLog);
+      saveDb();
+
+      return res.status(statusCode).json({
+        success: false,
+        error: failureReason,
+        setupStatus: 'INSUFFICIENT EVIDENCE',
+      });
     }
     ai_parse_ms = Date.now() - t_parse;
-
-    if (quotaHit) {
-      finalSignal.quotaNotice = 'Free-tier API limit reached. TradeGuard Institutional Engine executed full precision A+ SMC analysis with zero downtime.';
-    } else if (highDemandHit && !rawText) {
-      finalSignal.quotaNotice = 'Upstream AI model traffic spike detected. TradeGuard High-Availability Engine executed full precision A+ SMC analysis with zero downtime.';
-    }
 
     // 7. Schema Structure & Defaults Validation
     const t_schema = Date.now();
@@ -2310,39 +1593,60 @@ Process the 3 charts below INDEPENDENTLY, then synthesize the final trade decisi
       };
     }
 
+    const isNegativeOrNeutral =
+      finalSignal.bias === 'NEUTRAL' ||
+      String(finalSignal.setupStatus || '').toUpperCase().includes('NO VALID') ||
+      String(finalSignal.setupStatus || '').toUpperCase().includes('INSUFFICIENT') ||
+      finalSignal.setupBadge === 'Avoid' ||
+      finalSignal.setupBadge === 'Rejected / No Setup';
+
     if (!finalSignal.strategyScores || !Array.isArray(finalSignal.strategyScores)) {
       finalSignal.strategyScores = [
-        { strategy: 'ICT', score: 92, rationale: 'Liquidity sweep & FVG confirmation.' },
-        { strategy: 'SMC', score: 89, rationale: 'Order block mitigation & market structure alignment.' },
-        { strategy: 'Price Action', score: 85, rationale: 'Candlestick confirmation on key levels.' },
-        { strategy: 'Trend Following', score: 87, rationale: 'Trading in the direction of order flow.' },
-        { strategy: 'Breakout', score: 79, rationale: 'Expansion through local structure.' },
+        { strategy: 'ICT', score: isNegativeOrNeutral ? 25 : 75, rationale: isNegativeOrNeutral ? 'No verifiable liquidity sweep identified on chart.' : 'Evaluated from chart structure.' },
+        { strategy: 'SMC', score: isNegativeOrNeutral ? 20 : 70, rationale: isNegativeOrNeutral ? 'No valid unmitigated order block in discount/premium.' : 'Evaluated from chart structure.' },
+        { strategy: 'Price Action', score: isNegativeOrNeutral ? 30 : 65, rationale: isNegativeOrNeutral ? 'Price action lacks clear directional conviction.' : 'Evaluated from chart structure.' },
+        { strategy: 'Trend Following', score: isNegativeOrNeutral ? 35 : 65, rationale: isNegativeOrNeutral ? 'Market structure shows chop or consolidation.' : 'Evaluated from chart structure.' },
+        { strategy: 'Breakout', score: isNegativeOrNeutral ? 20 : 60, rationale: isNegativeOrNeutral ? 'No verified breakout confirmation.' : 'Evaluated from chart structure.' },
       ];
     }
 
     if (!finalSignal.recommendedStrategy) {
       finalSignal.recommendedStrategy = {
         name: strategy,
-        why: `The setup presents clear ${strategy} structural confirmation and liquidity sweeps.`,
+        why: isNegativeOrNeutral ? 'Insufficient structural edge to deploy strategy.' : `The setup presents observable ${strategy} structural conditions.`,
       };
     }
 
     if (!finalSignal.qualityScore) {
-      finalSignal.qualityScore = {
-        structure: 90,
-        trend: 88,
-        liquidity: 92,
-        volume: 85,
-        riskReward: 90,
-        volatility: 86,
-        overall: 89,
-        grade: 'A',
-        explanation: 'High probability institutional order flow alignment with defined risk parameter.',
-      };
+      if (isNegativeOrNeutral) {
+        finalSignal.qualityScore = {
+          structure: 20,
+          trend: 25,
+          liquidity: 20,
+          volume: 20,
+          riskReward: 15,
+          volatility: 30,
+          overall: 22,
+          grade: 'Avoid',
+          explanation: finalSignal.explanation?.whySelected || 'No valid institutional setup identified on the uploaded chart.',
+        };
+      } else {
+        finalSignal.qualityScore = {
+          structure: 75,
+          trend: 70,
+          liquidity: 75,
+          volume: 70,
+          riskReward: 70,
+          volatility: 70,
+          overall: 72,
+          grade: finalSignal.setupBadge || 'Developing',
+          explanation: finalSignal.explanation?.whySelected || 'Setup evaluated directly from visible chart structure.',
+        };
+      }
     }
 
     if (!finalSignal.setupBadge) {
-      finalSignal.setupBadge = finalSignal.qualityScore?.grade || 'A';
+      finalSignal.setupBadge = isNegativeOrNeutral ? 'Avoid' : (finalSignal.qualityScore?.grade || 'Developing');
     }
 
     if (!finalSignal.tradeManagement) {
