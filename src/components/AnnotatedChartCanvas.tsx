@@ -186,9 +186,9 @@ export const AnnotatedChartCanvas: React.FC<AnnotatedChartCanvasProps> = ({
 
             {/* Render Annotations */}
             {currentAnnotations.map((ann, idx) => {
-              const isLevel = ann.type === 'Entry' || ann.type === 'Stop Loss' || ann.type.startsWith('Take Profit');
-              const isZone = ann.type === 'FVG' || ann.type === 'Order Block' || ann.type.includes('Zone') || ann.type.includes('Block');
-              const isStruct = ann.type === 'BOS' || ann.type === 'CHOCH' || ann.type.includes('Liquidity') || ann.type.includes('High') || ann.type.includes('Low');
+              const isLevel = ann.type === 'Entry' || ann.type === 'Stop Loss' || ann.type.startsWith('Take Profit') || ann.type.includes('Protected') || ann.type === 'CISD';
+              const isZone = ann.type === 'FVG' || ann.type === 'Order Block' || ann.type.includes('Zone') || ann.type.includes('Block') || ann.type === 'POI';
+              const isStruct = ann.type === 'BOS' || ann.type === 'CHOCH' || ann.type === 'MSS' || ann.type.includes('Liquidity') || ann.type.includes('Sweep') || ann.type.includes('Swing') || ann.type.includes('Displacement') || ann.type.includes('High') || ann.type.includes('Low');
               const isSession = ann.type.includes('Session');
 
               if (isLevel && !showLevels) return null;
@@ -201,15 +201,27 @@ export const AnnotatedChartCanvas: React.FC<AnnotatedChartCanvasProps> = ({
               const x2 = ann.x2 ?? Math.min(x1 + 35, 95);
               const y2 = ann.y2 ?? (isLevel ? y1 : y1 + 6);
 
-              // 1. Horizontal Level Lines (Entry, SL, TP)
+              // 1. Horizontal Level Lines (Entry, SL, TP, Protected High/Low, CISD)
               if (isLevel) {
-                const color =
-                  ann.type === 'Entry'
-                    ? '#10b981'
-                    : ann.type === 'Stop Loss'
-                    ? '#f43f5e'
-                    : '#34d399';
-                const strokeDash = ann.type === 'Entry' ? '2,2' : 'none';
+                let color = '#10b981';
+                let strokeDash = 'none';
+
+                if (ann.type === 'Entry') {
+                  color = '#10b981';
+                  strokeDash = '2,2';
+                } else if (ann.type === 'Stop Loss') {
+                  color = '#f43f5e';
+                  strokeDash = 'none';
+                } else if (ann.type.startsWith('Take Profit')) {
+                  color = '#06b6d4';
+                  strokeDash = 'none';
+                } else if (ann.type.includes('Protected')) {
+                  color = '#38bdf8';
+                  strokeDash = '3,1';
+                } else if (ann.type === 'CISD') {
+                  color = '#c084fc';
+                  strokeDash = '2,1';
+                }
 
                 return (
                   <g key={idx} className="pointer-events-auto cursor-pointer" onClick={() => setSelectedAnnotation(ann)}>
@@ -236,9 +248,9 @@ export const AnnotatedChartCanvas: React.FC<AnnotatedChartCanvasProps> = ({
                     />
                     {/* Level Label Badge on right side */}
                     <rect
-                      x={Math.max(x2 - 24, x1)}
+                      x={Math.max(x2 - 26, x1)}
                       y={y1 - 2.2}
-                      width="23"
+                      width="25"
                       height="4.2"
                       fill="#0b0e14"
                       stroke={color}
@@ -246,10 +258,10 @@ export const AnnotatedChartCanvas: React.FC<AnnotatedChartCanvasProps> = ({
                       rx="0.8"
                     />
                     <text
-                      x={Math.max(x2 - 23, x1 + 1)}
+                      x={Math.max(x2 - 25, x1 + 1)}
                       y={y1 + 0.8}
                       fill={color}
-                      fontSize="2.2"
+                      fontSize="2.1"
                       fontWeight="bold"
                       fontFamily="monospace"
                     >
@@ -259,11 +271,13 @@ export const AnnotatedChartCanvas: React.FC<AnnotatedChartCanvasProps> = ({
                 );
               }
 
-              // 2. Zone Boxes (FVG, Order Block, Supply/Demand)
+              // 2. Zone Boxes (FVG, Order Block, Supply/Demand, POI, Mitigation Block)
               if (isZone) {
-                const isOB = ann.type === 'Order Block';
-                const fillColor = isOB ? 'url(#obGlow)' : 'url(#fvgGlow)';
-                const strokeColor = isOB ? '#818cf8' : '#38bdf8';
+                const isSupply = ann.type.includes('Supply');
+                const isDemand = ann.type.includes('Demand');
+                const isOB = ann.type === 'Order Block' || ann.type === 'POI';
+                const fillColor = isSupply ? '#991b1b33' : isDemand ? '#065f4633' : isOB ? 'url(#obGlow)' : 'url(#fvgGlow)';
+                const strokeColor = isSupply ? '#f87171' : isDemand ? '#34d399' : isOB ? '#818cf8' : '#38bdf8';
                 const width = Math.max(Math.abs(x2 - x1), 10);
                 const height = Math.max(Math.abs(y2 - y1), 3);
                 const boxY = Math.min(y1, y2);
@@ -296,10 +310,12 @@ export const AnnotatedChartCanvas: React.FC<AnnotatedChartCanvasProps> = ({
                 );
               }
 
-              // 3. Structure Lines & Liquidity Sweeps
+              // 3. Structure Lines & Liquidity Sweeps / Failure to Swing / Displacement
               if (isStruct) {
                 const isSweep = ann.type.includes('Sweep') || ann.type.includes('Liquidity');
-                const strokeColor = isSweep ? '#fbbf24' : '#c084fc';
+                const isFts = ann.type.includes('Swing') || ann.type.includes('Failure');
+                const isDisp = ann.type.includes('Displacement');
+                const strokeColor = isSweep ? '#fbbf24' : isFts ? '#f43f5e' : isDisp ? '#a78bfa' : '#c084fc';
                 return (
                   <g key={idx} className="pointer-events-auto cursor-pointer" onClick={() => setSelectedAnnotation(ann)}>
                     <line

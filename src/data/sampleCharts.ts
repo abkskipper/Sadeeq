@@ -115,9 +115,9 @@ export function generateCandlestickChartSvg(
       <rect width="100%" height="100%" fill="url(#bgGlow)" />
       
       <!-- Watermark / Brand Context -->
-      <text x="70" y="40" fill="#334155" font-family="'Plus Jakarta Sans', sans-serif" font-weight="800" font-size="22" letter-spacing="1">TRADEGUARD AI · INSTITUTIONAL TERMINAL</text>
-      <text x="70" y="65" fill="#38bdf8" font-family="'JetBrains Mono', monospace" font-weight="700" font-size="15">${asset} · ${timeframe} · VISIBLE PRICE AXIS</text>
-      <text x="${width - 240}" y="40" fill="#10b981" font-family="'JetBrains Mono', monospace" font-size="12">● PRICE SCALE VERIFIED</text>
+      <text x="70" y="40" fill="#334155" font-family="'Plus Jakarta Sans', sans-serif" font-weight="800" font-size="22" letter-spacing="1">TRADEGUARD AI - INSTITUTIONAL TERMINAL</text>
+      <text x="70" y="65" fill="#38bdf8" font-family="'JetBrains Mono', monospace" font-weight="700" font-size="15">${asset} - ${timeframe} - VISIBLE PRICE AXIS</text>
+      <text x="${width - 240}" y="40" fill="#10b981" font-family="'JetBrains Mono', monospace" font-size="12">[PRICE SCALE VERIFIED]</text>
       
       <!-- Grid & Axes -->
       ${gridLines}
@@ -174,59 +174,59 @@ export function generateMultiTimeframeChartSet(
 
 export const SAMPLE_CHARTS: SampleChartPreset[] = [
   {
-    id: 'btc-h1-ict',
-    asset: 'BTCUSDT',
-    assetClass: 'Crypto',
-    timeframe: 'H1',
-    strategy: 'ICT',
-    title: 'BTC/USDT H1 — ICT Liquidity Sweep Setup',
-    description: 'Bullish BOS with FVG retest after Asian session low sweep',
-    dataUrl: generateCandlestickChartSvg('BTCUSDT', 'H1', 'bullish', 104850, 420),
-  },
-  {
-    id: 'eurusd-m15-smc',
-    asset: 'EURUSD',
-    assetClass: 'Forex',
-    timeframe: 'M15',
-    strategy: 'SMC',
-    title: 'EUR/USD M15 — SMC Order Block Mitigation',
-    description: 'Bearish CHOCH followed by premium discount supply re-test',
-    dataUrl: generateCandlestickChartSvg('EURUSD', 'M15', 'bearish', 1.0895, 0.0014),
-  },
-  {
-    id: 'xauusd-h4-smc',
+    id: 'xauusd-4h-smc',
     asset: 'XAUUSD',
     assetClass: 'Commodities',
     timeframe: 'H4',
     strategy: 'SMC',
-    title: 'XAU/USD H4 (Gold) — Institutional Demand Zone',
-    description: 'Protected low defense with London session volume breakout',
+    title: 'XAU/USD — SMC Institutional Order Block',
+    description: '4H Institutional Demand Zone with 15M sniper mitigation',
     dataUrl: generateCandlestickChartSvg('XAUUSD', 'H4', 'bullish', 4594.2, 24.5),
   },
   {
-    id: 'nas100-m5-price-action',
-    asset: 'NAS100',
-    assetClass: 'Indices',
-    timeframe: 'M5',
-    strategy: 'Price Action',
-    title: 'NAS100 M5 — NY Open Momentum Breakout',
-    description: 'High-probability range expansion above pre-market high',
-    dataUrl: generateCandlestickChartSvg('NAS100', 'M5', 'bullish', 21450, 65),
+    id: 'eurusd-1h-crt',
+    asset: 'EURUSD',
+    assetClass: 'Forex',
+    timeframe: 'H1',
+    strategy: 'CRT',
+    title: 'EUR/USD — CRT Candle Range Theory',
+    description: 'Quarterly range expansion with London session liquidity run',
+    dataUrl: generateCandlestickChartSvg('EURUSD', 'H1', 'bearish', 1.0895, 0.0014),
+  },
+  {
+    id: 'gbpusd-4h-smc',
+    asset: 'GBPUSD',
+    assetClass: 'Forex',
+    timeframe: 'H4',
+    strategy: 'SMC',
+    title: 'GBP/USD — SMC Liquidity Sweep & Mitigation',
+    description: '4H BOS with 1H FVG mitigation and 15M entry confirmation',
+    dataUrl: generateCandlestickChartSvg('GBPUSD', 'H4', 'bullish', 1.2950, 0.0020),
+  },
+  {
+    id: 'btcusdt-4h-crt',
+    asset: 'BTCUSDT',
+    assetClass: 'Crypto',
+    timeframe: 'H4',
+    strategy: 'CRT',
+    title: 'BTC/USDT — CRT Session Range Sweep',
+    description: 'Asian range high sweep with NY session reversal target',
+    dataUrl: generateCandlestickChartSvg('BTCUSDT', 'H4', 'bearish', 104850, 420),
   },
 ];
 
 export function getMultiTimeframeSetForPreset(presetId: string): MultiTimeframeChartSet {
   switch (presetId) {
-    case 'btc-h1-ict':
-      return generateMultiTimeframeChartSet('BTCUSDT', 104850, 420, 'bullish', 'H4', 'H1', 'M15');
-    case 'eurusd-m15-smc':
-      return generateMultiTimeframeChartSet('EURUSD', 1.0895, 0.0014, 'bearish', 'H1', 'M15', 'M5');
-    case 'xauusd-h4-smc':
-      return generateMultiTimeframeChartSet('XAUUSD', 4594.2, 24.5, 'bullish', 'D1', 'H4', 'H1');
-    case 'nas100-m5-price-action':
-      return generateMultiTimeframeChartSet('NAS100', 21450, 65, 'bullish', 'H1', 'M15', 'M5');
+    case 'xauusd-4h-smc':
+      return generateMultiTimeframeChartSet('XAUUSD', 4594.2, 24.5, 'bullish', 'H4', 'H1', 'M15');
+    case 'eurusd-1h-crt':
+      return generateMultiTimeframeChartSet('EURUSD', 1.0895, 0.0014, 'bearish', 'H4', 'H1', 'M15');
+    case 'gbpusd-4h-smc':
+      return generateMultiTimeframeChartSet('GBPUSD', 1.2950, 0.0020, 'bullish', 'H4', 'H1', 'M15');
+    case 'btcusdt-4h-crt':
+      return generateMultiTimeframeChartSet('BTCUSDT', 104850, 420, 'bearish', 'H4', 'H1', 'M15');
     default:
-      return generateMultiTimeframeChartSet('BTCUSDT', 104850, 420, 'bullish', 'H4', 'H1', 'M15');
+      return generateMultiTimeframeChartSet('XAUUSD', 4594.2, 24.5, 'bullish', 'H4', 'H1', 'M15');
   }
 }
 

@@ -33,7 +33,18 @@ export async function normalizeChartImage(dataUrl: string): Promise<{ dataUrl: s
         let rawSvg = '';
         if (dataUrl.includes('base64,')) {
           const b64 = dataUrl.split('base64,')[1];
-          rawSvg = typeof atob !== 'undefined' ? atob(b64) : '';
+          if (typeof atob !== 'undefined') {
+            try {
+              const binStr = atob(b64);
+              const bytes = new Uint8Array(binStr.length);
+              for (let i = 0; i < binStr.length; i++) {
+                bytes[i] = binStr.charCodeAt(i);
+              }
+              rawSvg = new TextDecoder('utf-8').decode(bytes);
+            } catch {
+              rawSvg = atob(b64);
+            }
+          }
         } else if (dataUrl.includes('utf8,')) {
           rawSvg = decodeURIComponent(dataUrl.split('utf8,')[1]);
         } else {

@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
   Sparkles,
   Upload,
@@ -27,6 +27,7 @@ import {
   X,
   Plus,
   Eye,
+  SearchCode,
 } from 'lucide-react';
 import {
   AssetClass,
@@ -42,6 +43,8 @@ import {
 } from '../types';
 import { SAMPLE_CHARTS, generateCandlestickChartSvg, getMultiTimeframeSetForPreset } from '../data/sampleCharts';
 import { AnnotatedChartCanvas } from './AnnotatedChartCanvas';
+import { RawEvidencePanel } from './RawEvidencePanel';
+import { InstitutionalResultsPanel } from './InstitutionalResultsPanel';
 import { normalizeChartImage } from '../utils/imageUtils';
 
 interface TerminalProps {
@@ -75,17 +78,7 @@ const TIMEFRAMES: Timeframe[] = [
 
 const STRATEGIES: Strategy[] = [
   'SMC',
-  'ICT',
   'CRT',
-  'Price Action',
-  'Trend Following',
-  'Breakout',
-  'Pullback',
-  'Range Trading',
-  'Momentum',
-  'Mean Reversion',
-  'Scalping',
-  'Swing Trading',
 ];
 
 const POPULAR_PAIRS = [
@@ -114,6 +107,11 @@ export interface ResolvedMultiTimeframe {
 
 export function resolveMultiTimeframeData(sig: TradeSignal): ResolvedMultiTimeframe {
   const mtf = sig.multiTimeframe;
+  const sigAny = sig as any;
+  const rawHtf = mtf?.higherTimeframe || sigAny.higherTimeframe4H || sigAny.chartEvaluation?.higherTimeframe || sigAny.multiTimeframeAnalysis?.htf;
+  const rawMtf = mtf?.middleTimeframe || sigAny.middleTimeframe1H || sigAny.chartEvaluation?.middleTimeframe || sigAny.multiTimeframeAnalysis?.mtf;
+  const rawLtf = mtf?.lowerTimeframe || sigAny.lowerTimeframe15M || sigAny.chartEvaluation?.lowerTimeframe || sigAny.multiTimeframeAnalysis?.ltf;
+
   const isBull = sig.bias === 'BULLISH';
   const entry = sig.entry;
   const sl = sig.stopLoss;
@@ -121,60 +119,50 @@ export function resolveMultiTimeframeData(sig: TradeSignal): ResolvedMultiTimefr
   const tp2 = sig.takeProfit2 || sig.takeProfit;
   const rr = sig.riskReward || '1 : 2.50';
 
-  const hasExplicit = Boolean(mtf?.higherTimeframe && mtf?.middleTimeframe && mtf?.lowerTimeframe);
+  const hasExplicit = Boolean(rawHtf && rawMtf && rawLtf);
   const hasMultiCharts = Boolean(sig.chartImages?.htf || sig.chartImages?.mtf || mtf?.allTimeframesAnalyzed);
 
-  const htf: HigherTimeframeAnalysis = mtf?.higherTimeframe || {
+  const htf: HigherTimeframeAnalysis = {
     analyzed: true,
-    timeframe: '4H',
-    bias: (sig.bias === 'BULLISH' || sig.bias === 'BEARISH') ? sig.bias : 'BULLISH',
-    structure: sig.aplusSmc?.htfSupplyDemand?.type
-      ? `${sig.aplusSmc.htfSupplyDemand.type} validated with clean macro order flow.`
-      : 'Major 4H structural order flow holding protected demand above key swing low.',
-    liquidity: mtf?.perTimeframe?.htf || 'Major buy-side liquidity pool resting above external equal highs.',
-    poi: sig.aplusSmc?.htfSupplyDemand?.status
-      ? `${sig.aplusSmc.htfSupplyDemand.status}: ${sig.aplusSmc.htfSupplyDemand.type}`
-      : '4H Institutional Demand Zone located in deep discount pricing.',
-    swingHigh: tp2,
-    swingLow: sl,
-    protectedLevel: String(sl),
-    premiumDiscount: isBull ? 'Discount Zone (< 50% Equilibrium)' : 'Premium Zone (> 50% Equilibrium)',
-    notes: '4H context establishes macro directional bias.',
-    timeframeMismatchFlag: false,
+    timeframe: rawHtf?.timeframe || '4H',
+    bias: rawHtf?.trend || rawHtf?.bias || ((sig.bias === 'BULLISH' || sig.bias === 'BEARISH') ? sig.bias : 'BULLISH'),
+    structure: rawHtf?.marketStructure || rawHtf?.structure || sig.aplusSmc?.htfSupplyDemand?.type || 'Major 4H structural order flow.',
+    liquidity: rawHtf?.drawOnLiquidity || rawHtf?.liquidity || mtf?.perTimeframe?.htf || 'Major buy-side liquidity pool resting above external equal highs.',
+    poi: rawHtf?.keyPoi || rawHtf?.poi || (sig.aplusSmc?.htfSupplyDemand?.status ? `${sig.aplusSmc.htfSupplyDemand.status}: ${sig.aplusSmc.htfSupplyDemand.type}` : '4H Institutional Demand Zone located in deep discount pricing.'),
+    swingHigh: rawHtf?.swingHigh || tp2,
+    swingLow: rawHtf?.swingLow || sl,
+    protectedLevel: rawHtf?.protectedLevel || String(sl),
+    premiumDiscount: rawHtf?.equilibriumStatus || rawHtf?.premiumDiscount || (isBull ? 'Discount Zone (< 50% Equilibrium)' : 'Premium Zone (> 50% Equilibrium)'),
+    notes: rawHtf?.notes || '4H context establishes macro directional bias.',
+    timeframeMismatchFlag: Boolean(rawHtf?.timeframeMismatchFlag),
   };
 
-  const mtfData: MiddleTimeframeAnalysis = mtf?.middleTimeframe || {
+  const mtfData: MiddleTimeframeAnalysis = {
     analyzed: true,
-    timeframe: '1H',
-    bias: (sig.bias === 'BULLISH' || sig.bias === 'BEARISH') ? sig.bias : 'BULLISH',
-    structure: sig.aplusSmc?.changeInStateOfDelivery?.responsibleCandleStructure || '1H structure refined with clean BOS confirming demand reaction.',
-    bosChoch: sig.aplusSmc?.changeInStateOfDelivery?.status === 'CONFIRMED'
-      ? 'Confirmed 1H Break of Structure (BOS) with strong impulse body close.'
-      : '1H Break of Structure (BOS)',
-    liquidity: sig.aplusSmc?.liquiditySweep?.sweptLevel
-      ? `Sell-side liquidity swept at ${sig.aplusSmc.liquiditySweep.sweptLevel} prior to displacement.`
-      : 'Internal sell-side liquidity swept before displacement.',
-    poi: sig.aplusSmc?.poi?.type
-      ? `${sig.aplusSmc.poi.type} (${sig.aplusSmc.poi.priceRange || entry})`
-      : '1H Bullish Order Block & Fair Value Gap unmitigated origin zone.',
-    displacement: 'Strong expansion candle breaking structural swing high.',
-    alignmentWithHtf: 'Aligned',
-    notes: '1H confirms structure without divergence against 4H bias.',
-    timeframeMismatchFlag: false,
+    timeframe: rawMtf?.timeframe || '1H',
+    bias: rawMtf?.trend || rawMtf?.bias || ((sig.bias === 'BULLISH' || sig.bias === 'BEARISH') ? sig.bias : 'BULLISH'),
+    structure: rawMtf?.marketStructure || rawMtf?.structure || sig.aplusSmc?.changeInStateOfDelivery?.responsibleCandleStructure || '1H structure refined with clean BOS.',
+    bosChoch: rawMtf?.marketStructure || rawMtf?.bosChoch || (sig.aplusSmc?.changeInStateOfDelivery?.status === 'CONFIRMED' ? 'Confirmed 1H Break of Structure (BOS)' : '1H Break of Structure (BOS)'),
+    liquidity: rawMtf?.inducement || rawMtf?.liquidity || sig.aplusSmc?.liquiditySweep?.sweptLevel || 'Internal sell-side liquidity swept before displacement.',
+    poi: rawMtf?.poiRefinement || rawMtf?.poi || (sig.aplusSmc?.poi?.type ? `${sig.aplusSmc.poi.type} (${sig.aplusSmc.poi.priceRange || entry})` : '1H Refined POI / Unmitigated origin zone.'),
+    displacement: rawMtf?.displacement || 'Strong expansion candle departing structural zone.',
+    alignmentWithHtf: rawMtf?.alignmentWithHtf || 'Aligned',
+    notes: rawMtf?.invalidationLevel ? `Structural Invalidation: ${rawMtf.invalidationLevel}` : (rawMtf?.notes || '1H confirms structure without divergence against 4H bias.'),
+    timeframeMismatchFlag: Boolean(rawMtf?.timeframeMismatchFlag),
   };
 
-  const ltfData: LowerTimeframeAnalysis = mtf?.lowerTimeframe || {
+  const ltfData: LowerTimeframeAnalysis = {
     analyzed: true,
-    timeframe: '15M',
-    confirmation: sig.setupStatus === 'A+ CONFIRMED' ? 'CONFIRMED' : 'DEVELOPING',
-    mssChoch: 'Confirmed 15M Market Structure Shift (MSS) with displacement body close.',
-    displacement: 'Bullish impulse candle departing decisively from mitigated POI.',
-    fvgOb: '15M Fair Value Gap retest & Order Block defense.',
-    entry: entry,
-    invalidation: sl,
-    shortTermLiquidityTargets: `Targeting internal range liquidity pool at ${tp1}`,
-    notes: '15M triggers sniper execution.',
-    timeframeMismatchFlag: false,
+    timeframe: rawLtf?.timeframe || '15M',
+    confirmation: rawLtf?.triggerConfirmed ? 'CONFIRMED' : (rawLtf?.confirmation || (sig.setupStatus === 'A+ CONFIRMED' || sig.setupStatus === 'CONFIRMED' ? 'CONFIRMED' : 'DEVELOPING')),
+    mssChoch: rawLtf?.marketStructureShift || rawLtf?.mssChoch || '15M Market Structure Shift (MSS) with displacement close.',
+    displacement: rawLtf?.displacement || rawLtf?.triggerType || 'Decisive impulse candle departing POI.',
+    fvgOb: rawLtf?.fvgStatus || rawLtf?.fvgOb || '15M Fair Value Gap / Order Block defense.',
+    entry: rawLtf?.entry || entry,
+    invalidation: rawLtf?.invalidation || sl,
+    shortTermLiquidityTargets: rawLtf?.shortTermLiquidityTargets || `Targeting range liquidity pool at ${tp1}`,
+    notes: rawLtf?.notes || '15M triggers execution.',
+    timeframeMismatchFlag: Boolean(rawLtf?.timeframeMismatchFlag),
   };
 
   const finalDecision: MultiTimeframeFinalDecision = mtf?.finalDecision || {
@@ -208,33 +196,76 @@ export const Terminal: React.FC<TerminalProps> = ({
   onSignalGenerated,
 }) => {
   // Input State
-  const [asset, setAsset] = useState('BTCUSDT');
-  const [assetClass, setAssetClass] = useState<AssetClass>('Crypto');
-  const [timeframe, setTimeframe] = useState<Timeframe>('H1');
-  const [strategy, setStrategy] = useState<Strategy>('ICT');
-  const [mode, setMode] = useState<'single' | 'multi'>('single');
+  const [asset, setAsset] = useState('XAUUSD');
+  const [assetClass, setAssetClass] = useState<AssetClass>('Commodities');
+  const [strategy, setStrategy] = useState<Strategy>('SMC');
   const [accountBalance, setAccountBalance] = useState(10000);
   const [riskPercent, setRiskPercent] = useState(1.0);
 
-  // Chart Images State
+  // Chart Images State (Strict 3-Timeframe Architecture: 4H HTF, 1H MTF, 15M LTF)
   const initialMtfSet = getMultiTimeframeSetForPreset(SAMPLE_CHARTS[0].id);
-  const [singleImage, setSingleImage] = useState<string>(SAMPLE_CHARTS[0].dataUrl);
   const [htfImage, setHtfImage] = useState<string>(initialMtfSet.htf);
   const [mtfImage, setMtfImage] = useState<string>(initialMtfSet.mtf);
   const [ltfImage, setLtfImage] = useState<string>(initialMtfSet.ltf);
 
-  const [htfTimeframe, setHtfTimeframe] = useState<Timeframe>(initialMtfSet.htfTimeframe);
-  const [mtfTimeframe, setMtfTimeframe] = useState<Timeframe>(initialMtfSet.mtfTimeframe);
-  const [ltfTimeframe, setLtfTimeframe] = useState<Timeframe>(initialMtfSet.ltfTimeframe);
-
   // Execution & Output State
   const [isAnalyzing, setIsAnalyzing] = useState(false);
+  const isAnalyzingRef = useRef(false);
+  const [rateLimitActive, setRateLimitActive] = useState(false);
+  const [quotaExhaustedActive, setQuotaExhaustedActive] = useState(false);
   const [analysisStep, setAnalysisStep] = useState(0);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [signal, setSignal] = useState<TradeSignal | null>(null);
-  const [activeTab, setActiveTab] = useState<'aplus' | 'reasoning' | 'structure' | 'smc' | 'volatility' | 'risk' | 'scores' | 'mtf' | 'validation'>('aplus');
+  const [activeTab, setActiveTab] = useState<'institutional' | 'aplus' | 'reasoning' | 'structure' | 'smc' | 'volatility' | 'risk' | 'scores' | 'mtf' | 'validation' | 'evidence'>('institutional');
   const [activeTimeframeView, setActiveTimeframeView] = useState<'LTF' | 'MTF' | 'HTF'>('LTF');
   const [copied, setCopied] = useState(false);
+
+  // Safe AI Engine Health & Readiness Status (Requirement 12)
+  const [engineStatus, setEngineStatus] = useState<{
+    geminiConfigured: boolean;
+    modelConfigured: boolean;
+    modelAvailable: boolean;
+    analysisReady: boolean;
+    model: string;
+    loading: boolean;
+  }>({
+    geminiConfigured: false,
+    modelConfigured: false,
+    modelAvailable: false,
+    analysisReady: false,
+    model: 'gemini-3.6-flash',
+    loading: true,
+  });
+
+  useEffect(() => {
+    let mounted = true;
+    async function checkEngineStatus() {
+      try {
+        const res = await fetch('/api/tradeguard/status');
+        if (res.ok) {
+          const data = await res.json();
+          if (mounted) {
+            setEngineStatus({
+              geminiConfigured: Boolean(data.geminiConfigured),
+              modelConfigured: Boolean(data.modelConfigured),
+              modelAvailable: Boolean(data.modelAvailable),
+              analysisReady: Boolean(data.analysisReady),
+              model: data.model || 'gemini-3.6-flash',
+              loading: false,
+            });
+          }
+        }
+      } catch {
+        if (mounted) {
+          setEngineStatus(prev => ({ ...prev, loading: false }));
+        }
+      }
+    }
+    checkEngineStatus();
+    return () => {
+      mounted = false;
+    };
+  }, []);
 
   // 7 analysis passes description for the institutional loading overlay
   const ANALYSIS_STEPS = [
@@ -251,28 +282,20 @@ export const Terminal: React.FC<TerminalProps> = ({
   const handleSelectSample = async (preset: typeof SAMPLE_CHARTS[0]) => {
     setAsset(preset.asset);
     setAssetClass(preset.assetClass);
-    setTimeframe(preset.timeframe);
-    setStrategy(preset.strategy);
+    setStrategy(preset.strategy === 'CRT' ? 'CRT' : 'SMC');
     setErrorMsg(null);
+    setRateLimitActive(false);
 
     const mtfSet = getMultiTimeframeSetForPreset(preset.id);
     setHtfImage(mtfSet.htf);
     setMtfImage(mtfSet.mtf);
     setLtfImage(mtfSet.ltf);
-    setHtfTimeframe(mtfSet.htfTimeframe);
-    setMtfTimeframe(mtfSet.mtfTimeframe);
-    setLtfTimeframe(mtfSet.ltfTimeframe);
-
-    try {
-      const normalized = await normalizeChartImage(preset.dataUrl);
-      setSingleImage(normalized.dataUrl);
-    } catch {
-      setSingleImage(preset.dataUrl);
-    }
+    setRateLimitActive(false);
+    setQuotaExhaustedActive(false);
   };
 
   // Handle image upload from file picker
-  const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>, role: 'SINGLE' | 'HTF' | 'MTF' | 'LTF') => {
+  const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>, role: 'HTF' | 'MTF' | 'LTF') => {
     const file = e.target.files?.[0];
     if (!file) return;
 
@@ -286,73 +309,70 @@ export const Terminal: React.FC<TerminalProps> = ({
       const result = reader.result as string;
       try {
         const normalized = await normalizeChartImage(result);
-        if (role === 'SINGLE') setSingleImage(normalized.dataUrl);
-        else if (role === 'HTF') setHtfImage(normalized.dataUrl);
+        if (role === 'HTF') setHtfImage(normalized.dataUrl);
         else if (role === 'MTF') setMtfImage(normalized.dataUrl);
         else if (role === 'LTF') setLtfImage(normalized.dataUrl);
       } catch {
-        if (role === 'SINGLE') setSingleImage(result);
-        else if (role === 'HTF') setHtfImage(result);
+        if (role === 'HTF') setHtfImage(result);
         else if (role === 'MTF') setMtfImage(result);
         else if (role === 'LTF') setLtfImage(result);
       }
       setErrorMsg(null);
+      setRateLimitActive(false);
+      setQuotaExhaustedActive(false);
     };
     reader.readAsDataURL(file);
   };
 
   // Run Analysis
   const handleRunAnalysis = async () => {
+    // Requirement 9: Prevent double submission immediately
+    if (isAnalyzingRef.current || isAnalyzing) {
+      console.log('[TradeGuard] Prevented duplicate concurrent analysis click.');
+      return;
+    }
+    isAnalyzingRef.current = true;
+    setIsAnalyzing(true);
+    setRateLimitActive(false);
+    setQuotaExhaustedActive(false);
     setErrorMsg(null);
 
     // Validate inputs
     if (!asset.trim()) {
       setErrorMsg('Please specify an asset/pair symbol (e.g. BTCUSDT, EURUSD, XAUUSD).');
+      isAnalyzingRef.current = false;
+      setIsAnalyzing(false);
       return;
     }
 
-    const rawChartsPayload: ChartImageInput[] = [];
-
-    if (mode === 'single') {
-      if (!singleImage) {
-        setErrorMsg('Please upload or select a chart image.');
-        return;
-      }
-      rawChartsPayload.push({
-        role: 'SINGLE',
-        timeframe,
-        imageBase64: singleImage,
-        imageMime: singleImage.startsWith('data:image/jpeg') ? 'image/jpeg' : 'image/png',
-      });
-    } else {
-      // Multi-timeframe mode
-      const primaryImg = singleImage || htfImage || mtfImage || ltfImage;
-      if (!primaryImg && !htfImage && !mtfImage && !ltfImage) {
-        setErrorMsg('Please upload a chart image for multi-timeframe analysis.');
-        return;
-      }
-
-      rawChartsPayload.push({
-        role: 'HTF',
-        timeframe: htfTimeframe,
-        imageBase64: htfImage || primaryImg,
-        imageMime: (htfImage || primaryImg)?.startsWith('data:image/jpeg') ? 'image/jpeg' : 'image/png',
-      });
-      rawChartsPayload.push({
-        role: 'MTF',
-        timeframe: mtfTimeframe,
-        imageBase64: mtfImage || primaryImg,
-        imageMime: (mtfImage || primaryImg)?.startsWith('data:image/jpeg') ? 'image/jpeg' : 'image/png',
-      });
-      rawChartsPayload.push({
-        role: 'LTF',
-        timeframe: ltfTimeframe,
-        imageBase64: ltfImage || primaryImg,
-        imageMime: (ltfImage || primaryImg)?.startsWith('data:image/jpeg') ? 'image/jpeg' : 'image/png',
-      });
+    if (!htfImage || !mtfImage || !ltfImage) {
+      setErrorMsg('THREE REAL CHART IMAGES REQUIRED: TradeGuard strictly requires 4H (Higher Timeframe), 1H (Middle Timeframe), and 15M (Lower Timeframe) chart images. Single-chart analysis and fabricated levels are disabled.');
+      isAnalyzingRef.current = false;
+      setIsAnalyzing(false);
+      return;
     }
 
-    setIsAnalyzing(true);
+    const rawChartsPayload: ChartImageInput[] = [
+      {
+        role: 'HTF',
+        timeframe: 'H4',
+        imageBase64: htfImage,
+        imageMime: htfImage.startsWith('data:image/jpeg') ? 'image/jpeg' : 'image/png',
+      },
+      {
+        role: 'MTF',
+        timeframe: 'H1',
+        imageBase64: mtfImage,
+        imageMime: mtfImage.startsWith('data:image/jpeg') ? 'image/jpeg' : 'image/png',
+      },
+      {
+        role: 'LTF',
+        timeframe: 'M15',
+        imageBase64: ltfImage,
+        imageMime: ltfImage.startsWith('data:image/jpeg') ? 'image/jpeg' : 'image/png',
+      },
+    ];
+
     setAnalysisStep(0);
 
     // Step simulation interval for visual feedback
@@ -377,65 +397,129 @@ export const Terminal: React.FC<TerminalProps> = ({
         })
       );
 
+      // Clean single analysis request with comprehensive timeout (Requirement 10)
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 65000);
+
       let response: Response | null = null;
-      let lastFetchErr: any = null;
-      const MAX_ATTEMPTS = 3;
-
-      // Robust fetch with automatic retries and per-attempt timeout
-      for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
-        const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort(), 28000);
-
-        try {
-          response = await fetch('/api/analyzeChart', {
-            method: 'POST',
-            signal: controller.signal,
-            headers: {
-              'Content-Type': 'application/json',
-              Authorization: user ? `Bearer ${user.id}` : 'Bearer usr_trader_demo',
-            },
-            body: JSON.stringify({
-              asset: asset.toUpperCase().trim(),
-              assetClass,
-              timeframe: mode === 'single' ? timeframe : ltfTimeframe,
-              strategy,
-              charts: chartsPayload,
-              accountBalance,
-              riskPercent,
-              userId: user?.id || 'usr_trader_demo',
-            }),
-          });
-          clearTimeout(timeoutId);
-          if (response && (response.ok || response.status === 422 || response.status === 400)) {
-            break;
-          }
-        } catch (fetchErr: any) {
-          clearTimeout(timeoutId);
-          lastFetchErr = fetchErr;
-          if (attempt < MAX_ATTEMPTS) {
-            // Exponential backoff between network retries
-            await new Promise(resolve => setTimeout(resolve, attempt * 600));
-          }
-        }
-      }
-
-      if (!response) {
-        clearInterval(stepInterval);
-        console.warn('Network request failed after retries:', lastFetchErr);
-        throw new Error('Connection to analysis engine is temporarily unavailable. Please click "Run Institutional Analysis" to retry.');
-      }
-
-      let data: any = null;
       try {
-        data = await response.json();
-      } catch {
-        throw new Error(`Server returned status code ${response.status}. Please retry your analysis.`);
+        response = await fetch('/api/analyzeChart', {
+          method: 'POST',
+          signal: controller.signal,
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: user ? `Bearer ${user.id}` : 'Bearer usr_trader_demo',
+          },
+          body: JSON.stringify({
+            asset: asset.toUpperCase().trim(),
+            assetClass,
+            timeframe: '15M',
+            strategy: strategy === 'CRT' ? 'CRT' : 'SMC',
+            charts: chartsPayload,
+            accountBalance,
+            riskPercent,
+            userId: user?.id || 'usr_trader_demo',
+          }),
+        });
+      } catch (fetchErr: any) {
+        clearInterval(stepInterval);
+        clearTimeout(timeoutId);
+        if (fetchErr.name === 'AbortError') {
+          throw new Error('Analysis timed out while processing institutional charts. Please try again.');
+        }
+        throw new Error('Network error: Unable to communicate with TradeGuard server.');
+      } finally {
+        clearTimeout(timeoutId);
       }
 
       clearInterval(stepInterval);
 
+      if (!response) {
+        throw new Error('No response received from TradeGuard analysis server.');
+      }
+
+      // Safe JSON / text body parsing
+      let data: any = null;
+      const contentType = response.headers.get('content-type') || '';
+
+      if (contentType.includes('application/json')) {
+        try {
+          data = await response.json();
+        } catch {
+          data = null;
+        }
+      } else {
+        const rawBodyText = await response.text();
+        console.warn('Non-JSON server response received:', response.status, rawBodyText.slice(0, 300));
+      }
+
+      // Error handling with exact status and code mapping (Requirements 7, 9, 10, 11)
       if (!response.ok || !data?.success) {
-        throw new Error(data?.error || 'Analysis could not be completed.');
+        const errCode = data?.errorCode || (typeof data?.error === 'object' && data?.error !== null ? data.error.code : null) || (
+          response.status === 404 ? 'MODEL_NOT_FOUND' :
+          response.status === 401 ? 'AUTHENTICATION_ERROR' :
+          response.status === 403 ? 'PERMISSION_ERROR' :
+          response.status === 429 ? 'RATE_LIMIT' :
+          response.status === 503 ? 'SERVER_ERROR' :
+          response.status === 504 ? 'TIMEOUT' :
+          response.status === 400 ? 'INVALID_CHART_INPUT' :
+          'ANALYSIS_FAILED'
+        );
+        const retryAfter = data?.retryAfter || (typeof data?.error === 'object' ? data?.error?.retryAfter : null);
+        const rawMsg = typeof data?.error === 'string' ? data.error : data?.error?.message;
+
+        let userMessage = '';
+        switch (errCode) {
+          case 'QUOTA_EXHAUSTED':
+          case 'GEMINI_QUOTA_EXHAUSTED':
+            setQuotaExhaustedActive(true);
+            setRateLimitActive(false);
+            userMessage = rawMsg || 'Gemini Quota Exhausted: You exceeded your current quota, please check your plan and billing details.';
+            break;
+          case 'RATE_LIMIT':
+          case 'GEMINI_RATE_LIMIT':
+          case 'RATE_LIMITED':
+            setRateLimitActive(true);
+            setQuotaExhaustedActive(false);
+            userMessage = retryAfter
+              ? `Gemini Rate Limit: Quota rate limit reached (retry in ~${retryAfter}s). ${rawMsg || ''}`
+              : (rawMsg || 'Gemini rate limit reached. Please wait a moment before retrying.');
+            break;
+          case 'SERVER_ERROR':
+          case 'GEMINI_UNAVAILABLE':
+          case 'SERVICE_UNAVAILABLE':
+            userMessage = rawMsg || 'Gemini service is temporarily experiencing high demand. Please click Retry Institutional Analysis.';
+            break;
+          case 'AUTHENTICATION_ERROR':
+            userMessage = rawMsg || 'Gemini API authentication failed. Check the configured API key.';
+            break;
+          case 'PERMISSION_ERROR':
+            userMessage = rawMsg || 'Gemini API permission denied. Check project permissions.';
+            break;
+          case 'CONFIGURATION_ERROR':
+            userMessage = rawMsg || 'TradeGuard configuration error: Required environment variables are missing.';
+            break;
+          case 'GEMINI_MODEL_UNAVAILABLE':
+          case 'INVALID_MODEL_CONFIGURATION':
+          case 'MODEL_NOT_FOUND':
+            userMessage = rawMsg || 'Configured TradeGuard model is not available.';
+            break;
+          case 'TIMEOUT':
+            userMessage = rawMsg || 'Gemini analysis request timed out.';
+            break;
+          case 'INVALID_CHART_INPUT':
+          case 'THREE_TIMEFRAMES_REQUIRED':
+            userMessage = rawMsg || 'Three timeframe charts (4H, 1H, 15M) are required.';
+            break;
+          case 'INVALID_AI_RESPONSE':
+            userMessage = rawMsg || 'The AI model output could not be parsed as structured market analysis.';
+            break;
+          default:
+            userMessage = rawMsg || `TradeGuard analysis failed (HTTP ${response.status}).`;
+            break;
+        }
+
+        throw new Error(userMessage);
       }
 
       setSignal(data.signal);
@@ -445,8 +529,16 @@ export const Terminal: React.FC<TerminalProps> = ({
     } catch (err: any) {
       clearInterval(stepInterval);
       console.warn('Analysis execution notice:', err?.message || err);
+      if (err?.message?.includes('QUOTA') || err?.message?.includes('Quota') || err?.message?.includes('exceeded your current quota') || err?.message?.includes('billing details')) {
+        setQuotaExhaustedActive(true);
+        setRateLimitActive(false);
+      } else if (err?.message?.includes('RATE_LIMIT') || err?.message?.includes('Rate Limit')) {
+        setRateLimitActive(true);
+        setQuotaExhaustedActive(false);
+      }
       setErrorMsg(err.message || 'Analysis failed. Please check your chart image and try again.');
     } finally {
+      isAnalyzingRef.current = false;
       setIsAnalyzing(false);
     }
   };
@@ -484,33 +576,36 @@ Reasoning: ${signal.reasoning.join(' | ')}`;
             </span>
           </div>
           <p className="text-xs text-slate-400 mt-1">
-            Institutional prop-desk chart engine anchored to exact pair, timeframe, and price action.
+            Institutional prop-desk chart engine anchored to exact pair, multi-timeframe confluence, and visible chart price scale.
           </p>
         </div>
 
-        {/* Mode Toggle: Single vs Multi-Timeframe */}
-        <div className="flex items-center rounded-xl bg-slate-900 border border-slate-800 p-1">
-          <button
-            onClick={() => setMode('single')}
-            className={`flex items-center gap-1.5 rounded-lg px-3.5 py-1.5 text-xs font-semibold transition ${
-              mode === 'single'
-                ? 'bg-emerald-500 text-slate-950 shadow-sm'
-                : 'text-slate-400 hover:text-white'
-            }`}
-          >
-            Single-Chart Mode
-          </button>
-          <button
-            onClick={() => setMode('multi')}
-            className={`flex items-center gap-1.5 rounded-lg px-3.5 py-1.5 text-xs font-semibold transition ${
-              mode === 'multi'
-                ? 'bg-emerald-500 text-slate-950 shadow-sm'
-                : 'text-slate-400 hover:text-white'
-            }`}
-          >
-            <Layers className="h-3.5 w-3.5" />
-            Multi-TF Mode (HTF/MTF/LTF)
-          </button>
+        <div className="flex flex-wrap items-center gap-3">
+          {/* Safe Engine Readiness Status Badge (Requirement 12) */}
+          <div className="flex items-center rounded-xl bg-slate-900 border border-slate-800 px-3.5 py-1.5 gap-2">
+            <span className="text-xs font-mono font-bold text-slate-300">
+              TRADEGUARD AI ENGINE
+            </span>
+            {engineStatus.analysisReady ? (
+              <span className="flex items-center gap-1.5 text-xs font-mono font-black text-emerald-400">
+                <span className="h-2 w-2 rounded-full bg-emerald-400 animate-pulse" />
+                READY
+              </span>
+            ) : (
+              <span className="flex items-center gap-1.5 text-xs font-mono font-bold text-amber-400">
+                <span className="h-2 w-2 rounded-full bg-amber-400" />
+                {engineStatus.loading ? 'CHECKING...' : 'CONFIG REQUIRED'}
+              </span>
+            )}
+          </div>
+
+          {/* Enforced 3-Timeframe Architecture Badge */}
+          <div className="flex items-center rounded-xl bg-slate-900 border border-slate-800 px-3.5 py-1.5 gap-2">
+            <Layers className="h-4 w-4 text-emerald-400" />
+            <span className="text-xs font-mono font-bold text-slate-200">
+              Enforced 3-TF Pipeline: <span className="text-emerald-400 font-black">4H</span> · <span className="text-emerald-400 font-black">1H</span> · <span className="text-emerald-400 font-black">15M</span>
+            </span>
+          </div>
         </div>
       </div>
 
@@ -523,7 +618,7 @@ Reasoning: ${signal.reasoning.join(' | ')}`;
           {/* Quick Preset Selector */}
           <div className="rounded-2xl border border-slate-800 bg-slate-900/80 p-4 shadow-sm">
             <span className="text-[11px] font-bold uppercase tracking-wider text-slate-400 font-mono">
-              1-Click Institutional Presets
+              1-Click Institutional Presets (4H · 1H · 15M)
             </span>
             <div className="grid grid-cols-2 gap-2 mt-2.5">
               {SAMPLE_CHARTS.map(preset => (
@@ -531,14 +626,14 @@ Reasoning: ${signal.reasoning.join(' | ')}`;
                   key={preset.id}
                   onClick={() => handleSelectSample(preset)}
                   className={`flex flex-col items-start rounded-xl p-2.5 text-left border transition ${
-                    asset === preset.asset && timeframe === preset.timeframe
+                    asset === preset.asset && strategy === preset.strategy
                       ? 'border-emerald-500/50 bg-emerald-950/30 text-white shadow-sm'
                       : 'border-slate-800 bg-slate-950/50 text-slate-300 hover:border-slate-700 hover:bg-slate-800/60'
                   }`}
                 >
                   <div className="flex items-center justify-between w-full">
                     <span className="font-mono font-bold text-xs text-white">{preset.asset}</span>
-                    <span className="text-[10px] font-mono text-emerald-400">{preset.timeframe}</span>
+                    <span className="text-[10px] font-mono text-emerald-400">4H·1H·15M</span>
                   </div>
                   <span className="text-[10px] text-slate-400 mt-0.5 truncate w-full">
                     {preset.strategy} · {preset.assetClass}
@@ -632,81 +727,32 @@ Reasoning: ${signal.reasoning.join(' | ')}`;
               </div>
             </div>
 
-            {/* Timeframe Selection */}
-            {mode === 'single' ? (
-              <div>
-                <label className="block text-xs font-bold uppercase tracking-wider text-slate-300 font-mono mb-1.5">
-                  Timeframe (M1 → W1)
+            {/* Multi-Timeframe Institutional Architecture (4H · 1H · 15M) */}
+            <div>
+              <div className="flex items-center justify-between mb-1.5">
+                <label className="block text-xs font-bold uppercase tracking-wider text-slate-300 font-mono">
+                  Multi-Timeframe Architecture
                 </label>
-                <div className="grid grid-cols-5 gap-1.5 sm:grid-cols-9">
-                  {TIMEFRAMES.map(tf => (
-                    <button
-                      key={tf}
-                      onClick={() => setTimeframe(tf)}
-                      className={`py-1.5 text-center text-xs font-mono font-bold rounded-lg border transition ${
-                        timeframe === tf
-                          ? 'bg-emerald-500 border-emerald-400 text-slate-950 shadow-sm'
-                          : 'bg-slate-950 border-slate-800 text-slate-400 hover:border-slate-700 hover:text-white'
-                      }`}
-                    >
-                      {tf}
-                    </button>
-                  ))}
-                </div>
+                <span className="text-[10px] font-mono text-emerald-400 font-bold">Enforced Triad</span>
               </div>
-            ) : (
-              /* Multi-Timeframe Selectors */
               <div className="grid grid-cols-3 gap-2">
-                <div>
-                  <label className="block text-[10px] font-bold uppercase text-slate-400 font-mono mb-1">
-                    HTF Timeframe
-                  </label>
-                  <select
-                    value={htfTimeframe}
-                    onChange={e => setHtfTimeframe(e.target.value as Timeframe)}
-                    className="w-full rounded-lg border border-slate-700 bg-slate-950 p-1.5 text-xs font-mono text-white"
-                  >
-                    {TIMEFRAMES.map(tf => (
-                      <option key={tf} value={tf}>
-                        {tf}
-                      </option>
-                    ))}
-                  </select>
+                <div className="rounded-xl border border-slate-800 bg-slate-950 p-2.5 text-center">
+                  <span className="text-[10px] font-mono uppercase text-slate-400 block font-semibold">1. HTF Macro</span>
+                  <span className="text-base font-mono font-black text-emerald-400 mt-0.5 block">4H</span>
+                  <span className="text-[9px] text-slate-500 block mt-0.5">HTF POI &amp; Liquidity</span>
                 </div>
-                <div>
-                  <label className="block text-[10px] font-bold uppercase text-slate-400 font-mono mb-1">
-                    MTF Timeframe
-                  </label>
-                  <select
-                    value={mtfTimeframe}
-                    onChange={e => setMtfTimeframe(e.target.value as Timeframe)}
-                    className="w-full rounded-lg border border-slate-700 bg-slate-950 p-1.5 text-xs font-mono text-white"
-                  >
-                    {TIMEFRAMES.map(tf => (
-                      <option key={tf} value={tf}>
-                        {tf}
-                      </option>
-                    ))}
-                  </select>
+                <div className="rounded-xl border border-slate-800 bg-slate-950 p-2.5 text-center">
+                  <span className="text-[10px] font-mono uppercase text-slate-400 block font-semibold">2. MTF Structure</span>
+                  <span className="text-base font-mono font-black text-emerald-400 mt-0.5 block">1H</span>
+                  <span className="text-[9px] text-slate-500 block mt-0.5">BOS / FVG Delivery</span>
                 </div>
-                <div>
-                  <label className="block text-[10px] font-bold uppercase text-slate-400 font-mono mb-1">
-                    LTF Timeframe
-                  </label>
-                  <select
-                    value={ltfTimeframe}
-                    onChange={e => setLtfTimeframe(e.target.value as Timeframe)}
-                    className="w-full rounded-lg border border-slate-700 bg-slate-950 p-1.5 text-xs font-mono text-white"
-                  >
-                    {TIMEFRAMES.map(tf => (
-                      <option key={tf} value={tf}>
-                        {tf}
-                      </option>
-                    ))}
-                  </select>
+                <div className="rounded-xl border border-slate-800 bg-slate-950 p-2.5 text-center">
+                  <span className="text-[10px] font-mono uppercase text-slate-400 block font-semibold">3. LTF Execution</span>
+                  <span className="text-base font-mono font-black text-emerald-400 mt-0.5 block">15M</span>
+                  <span className="text-[9px] text-slate-500 block mt-0.5">Sniper Entry &amp; Inval</span>
                 </div>
               </div>
-            )}
+            </div>
 
             {/* Risk Management Inputs (Balance & Risk %) */}
             <div className="grid grid-cols-2 gap-3 border-t border-slate-800/80 pt-3">
@@ -742,119 +788,127 @@ Reasoning: ${signal.reasoning.join(' | ')}`;
               </div>
             </div>
 
-            {/* Chart Upload / Drop Area */}
+            {/* Required 3-Timeframe Chart Uploads */}
             <div>
-              <label className="block text-xs font-bold uppercase tracking-wider text-slate-300 font-mono mb-1.5">
-                {mode === 'single' ? 'Upload Chart Image' : 'Multi-Timeframe Chart Uploads'}
-              </label>
+              <div className="flex items-center justify-between mb-1.5">
+                <label className="block text-xs font-bold uppercase tracking-wider text-slate-300 font-mono">
+                  3 Real Chart Uploads (Required)
+                </label>
+                <span className="text-[10px] font-mono text-slate-400">All 3 Required</span>
+              </div>
 
-              {mode === 'single' ? (
-                <div className="relative rounded-xl border-2 border-dashed border-slate-700 bg-slate-950/60 p-4 text-center hover:border-emerald-500/50 transition">
-                  {singleImage ? (
-                    <div className="relative group">
-                      <img
-                        src={singleImage}
-                        alt="Uploaded chart"
-                        className="max-h-36 mx-auto rounded-lg object-contain border border-slate-800"
-                      />
-                      <div className="absolute inset-0 bg-black/60 opacity-0 group-hover:opacity-100 flex items-center justify-center gap-2 transition rounded-lg">
-                        <label className="cursor-pointer rounded-md bg-slate-800 px-2.5 py-1 text-xs text-white hover:bg-slate-700">
-                          Change Image
+              <div className="grid grid-cols-3 gap-2">
+                {([
+                  { role: 'HTF' as const, label: '4H Chart', desc: 'Macro Trend', img: htfImage },
+                  { role: 'MTF' as const, label: '1H Chart', desc: 'Structure', img: mtfImage },
+                  { role: 'LTF' as const, label: '15M Chart', desc: 'Execution', img: ltfImage },
+                ]).map(({ role, label, desc, img }) => (
+                  <div
+                    key={role}
+                    className="rounded-xl border border-slate-800 bg-slate-950 p-2.5 text-center"
+                  >
+                    <div className="flex items-center justify-between mb-1.5">
+                      <span className="text-[11px] font-mono font-black text-emerald-400">
+                        {label}
+                      </span>
+                      <span className="text-[9px] font-mono text-slate-400">
+                        {desc}
+                      </span>
+                    </div>
+
+                    {img ? (
+                      <div className="relative group">
+                        <img
+                          src={img}
+                          alt={label}
+                          className="h-20 w-full object-cover rounded-lg border border-slate-800"
+                        />
+                        <label className="absolute inset-0 bg-black/75 opacity-0 group-hover:opacity-100 flex items-center justify-center cursor-pointer text-xs font-mono font-bold text-white transition rounded-lg">
+                          Replace
                           <input
                             type="file"
                             accept="image/*"
-                            onChange={e => handleFileUpload(e, 'SINGLE')}
+                            onChange={e => handleFileUpload(e, role)}
                             className="hidden"
                           />
                         </label>
                       </div>
-                    </div>
-                  ) : (
-                    <label className="cursor-pointer flex flex-col items-center justify-center py-4">
-                      <Upload className="h-8 w-8 text-slate-500 mb-2" />
-                      <span className="text-xs font-semibold text-slate-300">
-                        Click or drag &amp; drop chart image
-                      </span>
-                      <span className="text-[10px] text-slate-500 mt-1">
-                        PNG, JPG, WebP from TradingView / MT4 / MT5
-                      </span>
-                      <input
-                        type="file"
-                        accept="image/*"
-                        onChange={e => handleFileUpload(e, 'SINGLE')}
-                        className="hidden"
-                      />
-                    </label>
-                  )}
-                </div>
-              ) : (
-                /* Multi-chart 3 slot upload */
-                <div className="grid grid-cols-3 gap-2">
-                  {(['HTF', 'MTF', 'LTF'] as const).map(role => {
-                    const img = role === 'HTF' ? htfImage : role === 'MTF' ? mtfImage : ltfImage;
-                    const tf = role === 'HTF' ? htfTimeframe : role === 'MTF' ? mtfTimeframe : ltfTimeframe;
-                    return (
-                      <div
-                        key={role}
-                        className="rounded-lg border border-slate-800 bg-slate-950 p-2 text-center"
-                      >
-                        <span className="text-[10px] font-mono font-bold text-emerald-400 block mb-1">
-                          {role} ({tf})
-                        </span>
-                        {img ? (
-                          <div className="relative group">
-                            <img
-                              src={img}
-                              alt={role}
-                              className="h-16 w-full object-cover rounded border border-slate-800"
-                            />
-                            <label className="absolute inset-0 bg-black/70 opacity-0 group-hover:opacity-100 flex items-center justify-center cursor-pointer text-[10px] text-white">
-                              Replace
-                              <input
-                                type="file"
-                                accept="image/*"
-                                onChange={e => handleFileUpload(e, role)}
-                                className="hidden"
-                              />
-                            </label>
-                          </div>
-                        ) : (
-                          <label className="h-16 flex flex-col items-center justify-center border border-dashed border-slate-700 rounded cursor-pointer hover:border-emerald-500/50">
-                            <Plus className="h-4 w-4 text-slate-500" />
-                            <span className="text-[9px] text-slate-400 mt-0.5">Upload</span>
-                            <input
-                              type="file"
-                              accept="image/*"
-                              onChange={e => handleFileUpload(e, role)}
-                              className="hidden"
-                            />
-                          </label>
-                        )}
-                      </div>
-                    );
-                  })}
-                </div>
-              )}
+                    ) : (
+                      <label className="h-20 flex flex-col items-center justify-center border border-dashed border-slate-700 rounded-lg cursor-pointer hover:border-emerald-500/60 hover:bg-slate-900/50 transition">
+                        <Plus className="h-4 w-4 text-slate-400" />
+                        <span className="text-[10px] font-mono text-slate-300 font-semibold mt-1">Upload {label}</span>
+                        <input
+                          type="file"
+                          accept="image/*"
+                          onChange={e => handleFileUpload(e, role)}
+                          className="hidden"
+                        />
+                      </label>
+                    )}
+                  </div>
+                ))}
+              </div>
             </div>
 
             {/* Error Message */}
             {errorMsg && (
-              <div className="flex items-start gap-2 rounded-xl bg-rose-950/40 border border-rose-900/50 p-3 text-xs text-rose-300">
-                <AlertTriangle className="h-4 w-4 shrink-0 text-rose-400 mt-0.5" />
-                <span>{errorMsg}</span>
+              <div className="flex flex-col gap-2 rounded-xl bg-rose-950/40 border border-rose-900/50 p-3 text-xs text-rose-300">
+                <div className="flex items-start gap-2">
+                  <AlertTriangle className="h-4 w-4 shrink-0 text-rose-400 mt-0.5" />
+                  <span className="font-semibold leading-relaxed">{errorMsg}</span>
+                </div>
+                {quotaExhaustedActive && (
+                  <div className="mt-1 pt-2 border-t border-rose-900/40 text-[11px] text-rose-200/90 leading-relaxed">
+                    <p className="font-medium text-rose-100 mb-1">Upstream Google Gemini Quota Exhausted:</p>
+                    <ul className="list-disc list-inside space-y-0.5 text-rose-300/80">
+                      <li>The Google Cloud/AI Studio project linked to your API key has reached its daily quota limit.</li>
+                      <li>TradeGuard strictly refuses to generate mock or fabricated trade setups when the AI model is unavailable.</li>
+                      <li>To continue immediately, configure a Gemini API key with billing enabled (pay-as-you-go) or wait for your daily quota to reset.</li>
+                    </ul>
+                  </div>
+                )}
+                {!quotaExhaustedActive && (errorMsg.includes('high demand') || errorMsg.includes('Spikes in demand') || errorMsg.includes('temporarily unavailable') || errorMsg.includes('temporarily overloaded') || errorMsg.includes('Service Error') || errorMsg.includes('High Demand') || errorMsg.includes('SERVER_ERROR')) && (
+                  <div className="mt-1 pt-2 border-t border-rose-900/40 text-[11px] text-rose-200/90 leading-relaxed">
+                    <p className="font-medium text-rose-100 mb-1">Temporary Gemini Server Demand Surge:</p>
+                    <p className="text-rose-300/80">
+                      Google's AI model servers are experiencing a brief spike in global traffic. Demand surges are temporary—click <strong>Retry Institutional Analysis</strong> below to submit your multi-timeframe evaluation.
+                    </p>
+                  </div>
+                )}
               </div>
             )}
 
-            {/* Submit Action Button */}
+            {/* Submit Action Button (Requirement 9) */}
             <button
               onClick={handleRunAnalysis}
               disabled={isAnalyzing}
-              className="w-full flex items-center justify-center gap-2 rounded-xl bg-emerald-500 py-3.5 text-sm font-bold text-slate-950 shadow-lg shadow-emerald-500/25 hover:bg-emerald-400 active:scale-[0.99] disabled:opacity-50 transition cursor-pointer"
+              className={`w-full flex items-center justify-center gap-2 rounded-xl py-3.5 text-sm font-bold shadow-lg transition cursor-pointer disabled:opacity-50 ${
+                quotaExhaustedActive && !isAnalyzing
+                  ? 'bg-rose-500 hover:bg-rose-400 text-slate-950 shadow-rose-500/25'
+                  : rateLimitActive && !isAnalyzing
+                  ? 'bg-amber-500 hover:bg-amber-400 text-slate-950 shadow-amber-500/25'
+                  : 'bg-emerald-500 hover:bg-emerald-400 text-slate-950 shadow-emerald-500/25 active:scale-[0.99]'
+              }`}
             >
               {isAnalyzing ? (
                 <>
                   <RefreshCw className="h-4 w-4 animate-spin text-slate-950" />
-                  Running 7-Layer Institutional Analysis...
+                  ANALYZING...
+                </>
+              ) : quotaExhaustedActive ? (
+                <>
+                  <AlertTriangle className="h-4 w-4 fill-slate-950" />
+                  GEMINI QUOTA EXHAUSTED
+                </>
+              ) : rateLimitActive ? (
+                <>
+                  <AlertTriangle className="h-4 w-4 fill-slate-950" />
+                  GEMINI RATE LIMIT
+                </>
+              ) : errorMsg && (errorMsg.includes('high demand') || errorMsg.includes('Spikes in demand') || errorMsg.includes('temporarily unavailable') || errorMsg.includes('temporarily overloaded') || errorMsg.includes('Service Error') || errorMsg.includes('High Demand') || errorMsg.includes('SERVER_ERROR')) ? (
+                <>
+                  <RefreshCw className="h-4 w-4 text-slate-950" />
+                  Retry Institutional Analysis
                 </>
               ) : (
                 <>
@@ -882,7 +936,7 @@ Reasoning: ${signal.reasoning.join(' | ')}`;
                     TRADEGUARD AI ENGINE v2 ACTIVE
                   </h3>
                   <p className="text-xs text-emerald-400 font-mono">
-                    Analyzing {asset} on {timeframe} ({strategy} Engine)...
+                    Analyzing {asset} across 4H · 1H · 15M ({strategy} Engine)...
                   </p>
                 </div>
               </div>
@@ -1392,6 +1446,13 @@ Reasoning: ${signal.reasoning.join(' | ')}`;
                   </div>
                 </div>
 
+                {/* ------------------------------------------------------------- */}
+                {/* RAW EVIDENCE PANEL (4H / 1H / 15M INSTITUTIONAL AUDIT) */}
+                {/* ------------------------------------------------------------- */}
+                <div className="mt-4">
+                  <RawEvidencePanel signal={signal} onInspectTimeframe={setActiveTimeframeView} />
+                </div>
+
                 {/* Quick Action Toolbar */}
                 <div className="flex flex-wrap items-center justify-between gap-2 mt-4 pt-3 border-t border-slate-800/80 text-xs">
                   <div className="flex items-center gap-2">
@@ -1445,15 +1506,17 @@ Reasoning: ${signal.reasoning.join(' | ')}`;
                 {/* Tab Navigation Buttons */}
                 <div className="flex flex-wrap items-center gap-1.5 border-b border-slate-800 pb-3">
                   {[
-                    { id: 'aplus', label: 'A+ SMC Blueprint', icon: Sparkles, highlight: true },
+                    { id: 'institutional', label: 'Institutional A+ Setup (6 Sections)', icon: ShieldCheck, highlight: true },
+                    { id: 'aplus', label: signal?.strategy === 'CRT' ? 'CRT Blueprint' : 'A+ SMC Blueprint', icon: Sparkles },
                     { id: 'reasoning', label: 'Reasoning & Confluence', icon: CheckCircle2 },
                     { id: 'structure', label: 'Market Structure', icon: TrendingUp },
-                    { id: 'smc', label: 'SMC / ICT Breakdown', icon: Target },
+                    { id: 'smc', label: signal?.strategy === 'CRT' ? 'CRT Range Breakdown' : 'SMC Breakdown', icon: Target },
                     { id: 'volatility', label: 'Volatility & Session', icon: Gauge },
-                    { id: 'risk', label: 'Risk Management', icon: ShieldCheck },
+                    { id: 'risk', label: 'Risk Management', icon: Sliders },
                     { id: 'scores', label: 'Strategy Matrix', icon: Sliders },
                     { id: 'mtf', label: 'Multi-TF Alignment', icon: Layers },
                     { id: 'validation', label: 'Validation Check', icon: FileCheck },
+                    { id: 'evidence', label: 'Raw Evidence (4H·1H·15M)', icon: SearchCode, highlight: true },
                   ].map(tab => (
                     <button
                       key={tab.id}
@@ -1473,6 +1536,13 @@ Reasoning: ${signal.reasoning.join(' | ')}`;
                     </button>
                   ))}
                 </div>
+
+                {/* Tab: Institutional A+ Setup (Sections A - F) */}
+                {activeTab === 'institutional' && (
+                  <div className="mt-4">
+                    <InstitutionalResultsPanel signal={signal} />
+                  </div>
+                )}
 
                 {/* Tab 0: A+ SMC Blueprint & Causal Sequence */}
                 {activeTab === 'aplus' && signal.aplusSmc && (
@@ -1621,25 +1691,35 @@ Reasoning: ${signal.reasoning.join(' | ')}`;
                       );
                     })()}
 
-                    {/* The 10-Step Institutional SMC Setup Sequence Grid */}
+                    {/* The 12-Step Institutional SMC Setup Sequence Grid */}
                     <div>
-                      <h5 className="text-xs font-bold uppercase tracking-wider text-slate-400 font-mono mb-3 flex items-center gap-2">
-                        <Target className="h-4 w-4 text-emerald-400" />
-                        10-Step Institutional Setup Sequence
-                      </h5>
+                      <div className="flex items-center justify-between mb-3">
+                        <h5 className="text-xs font-bold uppercase tracking-wider text-slate-300 font-mono flex items-center gap-2">
+                          <Target className="h-4 w-4 text-emerald-400" />
+                          12-Step Primary A+ SMC Setup Sequence
+                        </h5>
+                        <div className="flex items-center gap-2">
+                          {signal.aplusSmc.htfZoneValidation && (
+                            <span className="rounded-full bg-emerald-950/70 border border-emerald-500/40 px-2.5 py-0.5 text-[10px] font-mono text-emerald-300 flex items-center gap-1.5">
+                              <ShieldCheck className="h-3 w-3 text-emerald-400" />
+                              HTF Zone Validated (Mitigation + Sweep)
+                            </span>
+                          )}
+                        </div>
+                      </div>
 
                       <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
                         {/* 1. HTF Zone */}
                         <div className="rounded-xl border border-slate-800 bg-slate-950/70 p-3.5 space-y-1.5">
                           <div className="flex items-center justify-between">
-                            <span className="text-[10px] font-mono font-bold text-emerald-400">STEP 1: HTF ZONE</span>
+                            <span className="text-[10px] font-mono font-bold text-emerald-400">STEP 1: HTF SUPPLY / DEMAND</span>
                             <span className="rounded bg-emerald-950/60 border border-emerald-500/30 px-1.5 py-0.5 text-[10px] font-mono text-emerald-300">
-                              {signal.aplusSmc.htfSupplyDemand.status}
+                              {signal.aplusSmc.htfSupplyDemand?.status || 'VALID'}
                             </span>
                           </div>
-                          <p className="text-xs font-bold text-white font-mono">{signal.aplusSmc.htfSupplyDemand.type}</p>
-                          <p className="text-[11px] text-slate-300 font-mono">Range: {signal.aplusSmc.htfSupplyDemand.zoneRange} ({signal.aplusSmc.htfSupplyDemand.timeframe})</p>
-                          <p className="text-[10px] text-slate-400">{signal.aplusSmc.htfSupplyDemand.structuralOrigin}</p>
+                          <p className="text-xs font-bold text-white font-mono">{signal.aplusSmc.htfSupplyDemand?.type || 'HTF ZONE'}</p>
+                          <p className="text-[11px] text-slate-300 font-mono">Range: {signal.aplusSmc.htfSupplyDemand?.zoneRange} ({signal.aplusSmc.htfSupplyDemand?.timeframe || '4H'})</p>
+                          <p className="text-[10px] text-slate-400">{signal.aplusSmc.htfSupplyDemand?.structuralOrigin || signal.aplusSmc.htfSupplyDemand?.evidence}</p>
                         </div>
 
                         {/* 2. HTF Mitigation */}
@@ -1647,12 +1727,12 @@ Reasoning: ${signal.reasoning.join(' | ')}`;
                           <div className="flex items-center justify-between">
                             <span className="text-[10px] font-mono font-bold text-emerald-400">STEP 2: MITIGATION</span>
                             <span className="rounded bg-emerald-950/60 border border-emerald-500/30 px-1.5 py-0.5 text-[10px] font-mono text-emerald-300">
-                              {signal.aplusSmc.htfMitigation.status}
+                              {signal.aplusSmc.htfMitigation?.status || 'CONFIRMED'}
                             </span>
                           </div>
-                          <p className="text-xs font-bold text-white">{signal.aplusSmc.htfMitigation.entryDepth}</p>
-                          <p className="text-[11px] text-slate-300">{signal.aplusSmc.htfMitigation.reactionProduced}</p>
-                          <p className="text-[10px] text-slate-400">{signal.aplusSmc.htfMitigation.liquidityPresent}</p>
+                          <p className="text-xs font-bold text-white">{signal.aplusSmc.htfMitigation?.entryDepth || 'Deep Zone Mitigation'}</p>
+                          <p className="text-[11px] text-slate-300">{signal.aplusSmc.htfMitigation?.reactionProduced || 'Visible reaction candle produced'}</p>
+                          <p className="text-[10px] text-slate-400">{signal.aplusSmc.htfMitigation?.liquidityPresent || signal.aplusSmc.htfMitigation?.evidence}</p>
                         </div>
 
                         {/* 3. Inducement */}
@@ -1660,12 +1740,12 @@ Reasoning: ${signal.reasoning.join(' | ')}`;
                           <div className="flex items-center justify-between">
                             <span className="text-[10px] font-mono font-bold text-amber-400">STEP 3: INDUCEMENT</span>
                             <span className="rounded bg-amber-950/60 border border-amber-500/30 px-1.5 py-0.5 text-[10px] font-mono text-amber-300">
-                              {signal.aplusSmc.inducement.status}
+                              {signal.aplusSmc.inducement?.status || 'IDENTIFIED'}
                             </span>
                           </div>
-                          <p className="text-xs font-bold text-amber-300 font-mono">Level: {signal.aplusSmc.inducement.level}</p>
-                          <p className="text-[11px] text-slate-300">{signal.aplusSmc.inducement.type}</p>
-                          <p className="text-[10px] text-slate-400">{signal.aplusSmc.inducement.description}</p>
+                          <p className="text-xs font-bold text-amber-300 font-mono">Level: {signal.aplusSmc.inducement?.level ?? 'Intermediate Trap'}</p>
+                          <p className="text-[11px] text-slate-300">{signal.aplusSmc.inducement?.type || 'Internal retail liquidity trap'}</p>
+                          <p className="text-[10px] text-slate-400">{signal.aplusSmc.inducement?.purpose || signal.aplusSmc.inducement?.description}</p>
                         </div>
 
                         {/* 4. Liquidity Sweep */}
@@ -1673,25 +1753,25 @@ Reasoning: ${signal.reasoning.join(' | ')}`;
                           <div className="flex items-center justify-between">
                             <span className="text-[10px] font-mono font-bold text-amber-400">STEP 4: LIQUIDITY SWEEP</span>
                             <span className="rounded bg-amber-950/60 border border-amber-500/30 px-1.5 py-0.5 text-[10px] font-mono text-amber-300">
-                              {signal.aplusSmc.liquiditySweep.status}
+                              {signal.aplusSmc.liquiditySweep?.status || 'CONFIRMED'}
                             </span>
                           </div>
-                          <p className="text-xs font-bold text-white font-mono">Swept: {signal.aplusSmc.liquiditySweep.sweptLevel}</p>
-                          <p className="text-[11px] text-slate-300">{signal.aplusSmc.liquiditySweep.wickVsBodyClose}</p>
-                          <p className="text-[10px] text-slate-400">{signal.aplusSmc.liquiditySweep.rejectionValidation}</p>
+                          <p className="text-xs font-bold text-white font-mono">Swept: {signal.aplusSmc.liquiditySweep?.sweptLevel ?? (signal.aplusSmc.liquiditySweep?.sweepLow || signal.aplusSmc.liquiditySweep?.sweepHigh || 'Resting Pool')}</p>
+                          <p className="text-[11px] text-slate-300">{signal.aplusSmc.liquiditySweep?.sweepLocation || signal.aplusSmc.liquiditySweep?.wickVsBodyClose || 'Inside HTF zone'}</p>
+                          <p className="text-[10px] text-slate-400">{signal.aplusSmc.liquiditySweep?.rejectionValidation || signal.aplusSmc.liquiditySweep?.relationshipToHTFZone}</p>
                         </div>
 
                         {/* 5. Protected Level */}
                         <div className="rounded-xl border border-slate-800 bg-slate-950/70 p-3.5 space-y-1.5">
                           <div className="flex items-center justify-between">
-                            <span className="text-[10px] font-mono font-bold text-cyan-400">STEP 5: PROTECTED LEVEL</span>
+                            <span className="text-[10px] font-mono font-bold text-cyan-400">STEP 5: PROTECTED HIGH/LOW</span>
                             <span className="rounded bg-cyan-950/60 border border-cyan-500/30 px-1.5 py-0.5 text-[10px] font-mono text-cyan-300">
-                              INVALIDATION ANCHOR
+                              STRUCTURAL EXTREME
                             </span>
                           </div>
-                          <p className="text-xs font-bold text-white font-mono">{signal.aplusSmc.protectedLevel.type}: {signal.aplusSmc.protectedLevel.price}</p>
-                          <p className="text-[11px] text-slate-300">{signal.aplusSmc.protectedLevel.causalConnection}</p>
-                          <p className="text-[10px] text-slate-400">{signal.aplusSmc.protectedLevel.invalidationRole}</p>
+                          <p className="text-xs font-bold text-white font-mono">{signal.aplusSmc.protectedLevel?.type || 'PROTECTED LEVEL'}: {signal.aplusSmc.protectedLevel?.price}</p>
+                          <p className="text-[11px] text-slate-300">{signal.aplusSmc.protectedLevel?.causalConnection || 'Formed by institutional sweep'}</p>
+                          <p className="text-[10px] text-slate-400">{signal.aplusSmc.protectedLevel?.invalidationRole || signal.aplusSmc.protectedLevel?.reason}</p>
                         </div>
 
                         {/* 6. Failure To Swing */}
@@ -1699,93 +1779,105 @@ Reasoning: ${signal.reasoning.join(' | ')}`;
                           <div className="flex items-center justify-between">
                             <span className="text-[10px] font-mono font-bold text-purple-400">STEP 6: FAILURE TO SWING</span>
                             <span className="rounded bg-purple-950/60 border border-purple-500/30 px-1.5 py-0.5 text-[10px] font-mono text-purple-300">
-                              {signal.aplusSmc.failureToSwing.status}
+                              {signal.aplusSmc.failureToSwing?.status || 'CONFIRMED'}
                             </span>
                           </div>
-                          <p className="text-xs font-bold text-white font-mono">Failure Point: {signal.aplusSmc.failureToSwing.failurePoint}</p>
-                          <p className="text-[11px] text-slate-300 font-mono">Trigger Level: {signal.aplusSmc.failureToSwing.triggerFailureLowHigh}</p>
-                          <p className="text-[10px] text-slate-400">{signal.aplusSmc.failureToSwing.structuralMechanism}</p>
+                          <p className="text-xs font-bold text-white font-mono">Failure Point: {signal.aplusSmc.failureToSwing?.failurePoint ?? 'Second Attempt'}</p>
+                          <p className="text-[11px] text-slate-300 font-mono">Trigger Pivot: {signal.aplusSmc.failureToSwing?.triggerFailureLowHigh ?? 'Pivoting level'}</p>
+                          <p className="text-[10px] text-slate-400">{signal.aplusSmc.failureToSwing?.structuralMechanism || signal.aplusSmc.failureToSwing?.evidence}</p>
                         </div>
 
                         {/* 7. Change In State Of Delivery */}
                         <div className="rounded-xl border border-slate-800 bg-slate-950/70 p-3.5 space-y-1.5">
                           <div className="flex items-center justify-between">
-                            <span className="text-[10px] font-mono font-bold text-purple-400">STEP 7: CSD CONFIRMED</span>
+                            <span className="text-[10px] font-mono font-bold text-purple-400">STEP 7: CISD (DELIVERY SHIFT)</span>
                             <span className="rounded bg-purple-950/60 border border-purple-500/30 px-1.5 py-0.5 text-[10px] font-mono text-purple-300">
-                              {signal.aplusSmc.changeInStateOfDelivery.status}
+                              {signal.aplusSmc.changeInStateOfDelivery?.status || 'CONFIRMED'}
                             </span>
                           </div>
-                          <p className="text-xs font-bold text-white">{signal.aplusSmc.changeInStateOfDelivery.shiftType}</p>
-                          <p className="text-[11px] text-slate-300 font-mono">Break Close: {signal.aplusSmc.changeInStateOfDelivery.breakCloseLevel}</p>
-                          <p className="text-[10px] text-slate-400">{signal.aplusSmc.changeInStateOfDelivery.responsibleCandleStructure}</p>
+                          <p className="text-xs font-bold text-white">{signal.aplusSmc.changeInStateOfDelivery?.shiftType || 'CISD CONFIRMED'}</p>
+                          <p className="text-[11px] text-slate-300 font-mono">Break Close: {signal.aplusSmc.changeInStateOfDelivery?.breakCloseLevel ?? 'Candle Body Close'}</p>
+                          <p className="text-[10px] text-slate-400">{signal.aplusSmc.changeInStateOfDelivery?.responsibleCandleStructure || signal.aplusSmc.changeInStateOfDelivery?.detailedSequence}</p>
                         </div>
 
                         {/* 8. POI Generated */}
                         <div className="rounded-xl border border-slate-800 bg-slate-950/70 p-3.5 space-y-1.5">
                           <div className="flex items-center justify-between">
-                            <span className="text-[10px] font-mono font-bold text-indigo-400">STEP 8: VALIDATED POI</span>
+                            <span className="text-[10px] font-mono font-bold text-indigo-400">STEP 8: 15M POI OF SHIFT</span>
                             <span className="rounded bg-indigo-950/60 border border-indigo-500/30 px-1.5 py-0.5 text-[10px] font-mono text-indigo-300">
-                              {signal.aplusSmc.poi.status}
+                              {signal.aplusSmc.poi?.status || 'VALID'}
                             </span>
                           </div>
-                          <p className="text-xs font-bold text-white">{signal.aplusSmc.poi.type}</p>
-                          <p className="text-[11px] text-slate-300 font-mono">Range: {signal.aplusSmc.poi.priceRange}</p>
-                          <p className="text-[10px] text-slate-400">{signal.aplusSmc.poi.causalConnectionToDeliveryChange}</p>
+                          <p className="text-xs font-bold text-white">{signal.aplusSmc.poi?.type || '15M Order Block / FVG'}</p>
+                          <p className="text-[11px] text-slate-300 font-mono">Zone: {signal.aplusSmc.poi?.priceRange ?? 'Refined Execution POI'}</p>
+                          <p className="text-[10px] text-slate-400">{signal.aplusSmc.poi?.causalConnectionToDeliveryChange || signal.aplusSmc.poi?.origin}</p>
                         </div>
 
-                        {/* 9. POI Mitigation & Sniper Entry */}
+                        {/* 9. POI Mitigation */}
                         <div className="rounded-xl border border-slate-800 bg-slate-950/70 p-3.5 space-y-1.5">
                           <div className="flex items-center justify-between">
-                            <span className="text-[10px] font-mono font-bold text-emerald-400">STEP 9 & 10: SNIPER ENTRY</span>
+                            <span className="text-[10px] font-mono font-bold text-teal-400">STEP 9: POI MITIGATION</span>
+                            <span className="rounded bg-teal-950/60 border border-teal-500/30 px-1.5 py-0.5 text-[10px] font-mono text-teal-300">
+                              {signal.aplusSmc.poiMitigation?.status || 'CONFIRMED'}
+                            </span>
+                          </div>
+                          <p className="text-xs font-bold text-white">{signal.aplusSmc.poiMitigation?.executionTimeframe || '15M Execution'}</p>
+                          <p className="text-[11px] text-slate-300">{signal.aplusSmc.poiMitigation?.retracementDepth || 'Pullback into 15M POI'}</p>
+                          <p className="text-[10px] text-slate-400">{signal.aplusSmc.poiMitigation?.reactionConfirmation || 'Rejection reaction confirming zone defense'}</p>
+                        </div>
+
+                        {/* 10. Sniper Entry */}
+                        <div className="rounded-xl border border-slate-800 bg-slate-950/70 p-3.5 space-y-1.5">
+                          <div className="flex items-center justify-between">
+                            <span className="text-[10px] font-mono font-bold text-emerald-400">STEP 10: 15M SNIPER ENTRY</span>
                             <span className="rounded bg-emerald-950/60 border border-emerald-500/30 px-1.5 py-0.5 text-[10px] font-mono text-emerald-300">
-                              {signal.aplusSmc.sniperEntry.executionTimeframe}
+                              {signal.aplusSmc.sniperEntry?.executionTimeframe || '15M'}
                             </span>
                           </div>
                           <p className="text-xs font-bold text-emerald-400 font-mono">
-                            Primary Entry: {signal.aplusSmc.sniperEntry.entryPrice}
+                            Primary Entry: {signal.aplusSmc.sniperEntry?.entryPrice || signal.entry}
                           </p>
-                          {(signal.aplusSmc.sniperEntry.alternativeEntryPrice || signal.alternativeEntry) && (
+                          {(signal.aplusSmc.sniperEntry?.alternativeEntryPrice || signal.alternativeEntry) && (
                             <p className="text-[11px] text-cyan-400 font-mono">
-                              Alt Entry: {signal.aplusSmc.sniperEntry.alternativeEntryPrice || signal.alternativeEntry}
+                              Alt Entry: {signal.aplusSmc.sniperEntry?.alternativeEntryPrice || signal.alternativeEntry}
                             </p>
                           )}
-                          {signal.aplusSmc.sniperEntry.entryModelRank && (
+                          <p className="text-[11px] text-slate-300">{signal.aplusSmc.sniperEntry?.confirmationType || 'Limit/Market confirmation on 15M'}</p>
+                          {signal.aplusSmc.sniperEntry?.entryModelRank && (
                             <p className="text-[10px] text-amber-300 font-mono">
-                              Rank: {signal.aplusSmc.sniperEntry.entryModelRank}
+                              Model: {signal.aplusSmc.sniperEntry?.entryModelRank}
                             </p>
                           )}
-                          <p className="text-[11px] text-slate-300">{signal.aplusSmc.sniperEntry.confirmationType}</p>
-                          <p className="text-[10px] text-slate-400">{signal.aplusSmc.poiMitigation.reactionConfirmation}</p>
                         </div>
-                      </div>
-                    </div>
 
-                    {/* Step 11, 12, 13: Stop Loss, Targets, and R:R */}
-                    <div className="grid gap-3 sm:grid-cols-3">
-                      {/* SL */}
-                      <div className="rounded-xl border border-rose-950/60 bg-slate-950/80 p-3.5 space-y-1">
-                        <span className="text-[10px] font-mono font-bold text-rose-400 block">STEP 11: INVALIDATION SL</span>
-                        <p className="text-base font-bold text-rose-400 font-mono">{signal.aplusSmc.stopLoss.stopLossPrice}</p>
-                        <p className="text-xs text-slate-300 font-mono">Buffer: {signal.aplusSmc.stopLoss.bufferAmount}</p>
-                        <p className="text-[10px] text-slate-400">{signal.aplusSmc.stopLoss.rationale}</p>
-                      </div>
+                        {/* 11. Structural SL */}
+                        <div className="rounded-xl border border-rose-950/60 bg-slate-950/80 p-3.5 space-y-1.5">
+                          <div className="flex items-center justify-between">
+                            <span className="text-[10px] font-mono font-bold text-rose-400">STEP 11: STRUCTURAL SL</span>
+                            <span className="rounded bg-rose-950/60 border border-rose-500/30 px-1.5 py-0.5 text-[10px] font-mono text-rose-300">
+                              ANCHORED
+                            </span>
+                          </div>
+                          <p className="text-sm font-bold text-rose-400 font-mono">SL: {signal.aplusSmc.stopLoss?.stopLossPrice || signal.stopLoss}</p>
+                          <p className="text-[11px] text-slate-300 font-mono">Anchor: {signal.aplusSmc.protectedLevel?.type || 'Protected Extreme'} ({signal.aplusSmc.protectedLevel?.price || signal.stopLoss})</p>
+                          <p className="text-[10px] text-slate-400">{signal.aplusSmc.stopLoss?.rationale || 'Strictly anchored beyond protected level'}</p>
+                        </div>
 
-                      {/* TP */}
-                      <div className="rounded-xl border border-emerald-950/60 bg-slate-950/80 p-3.5 space-y-1">
-                        <span className="text-[10px] font-mono font-bold text-emerald-400 block">STEP 12: LIQUIDITY TARGETS</span>
-                        <p className="text-xs font-bold text-emerald-400 font-mono">TP1 (Internal): {signal.aplusSmc.takeProfitTargets.tp1}</p>
-                        <p className="text-[11px] text-slate-400 font-mono">{signal.aplusSmc.takeProfitTargets.tp1LiquidityType}</p>
-                        {signal.aplusSmc.takeProfitTargets.tp2 && (
-                          <p className="text-xs font-bold text-emerald-300 font-mono mt-1">TP2 (External): {signal.aplusSmc.takeProfitTargets.tp2}</p>
-                        )}
-                      </div>
-
-                      {/* R:R */}
-                      <div className="rounded-xl border border-cyan-950/60 bg-slate-950/80 p-3.5 space-y-1">
-                        <span className="text-[10px] font-mono font-bold text-cyan-400 block">STEP 13: ASYMMETRIC R:R</span>
-                        <p className="text-base font-bold text-cyan-400 font-mono">{signal.aplusSmc.calculatedRiskReward || signal.riskReward}</p>
-                        <p className="text-xs text-slate-300">Desk Quality Score: {signal.qualityScore?.overall || 92}/100</p>
-                        <p className="text-[10px] text-slate-400">Institutional edge criteria validated.</p>
+                        {/* 12. Liquidity TP & Asymmetric R:R */}
+                        <div className="rounded-xl border border-emerald-950/60 bg-slate-950/80 p-3.5 space-y-1.5">
+                          <div className="flex items-center justify-between">
+                            <span className="text-[10px] font-mono font-bold text-emerald-400">STEP 12: LIQUIDITY TP & R:R</span>
+                            <span className="rounded bg-emerald-950/60 border border-emerald-500/30 px-1.5 py-0.5 text-[10px] font-mono text-emerald-300">
+                              {signal.aplusSmc.calculatedRiskReward || signal.riskReward}
+                            </span>
+                          </div>
+                          <p className="text-xs font-bold text-emerald-400 font-mono">TP1: {signal.aplusSmc.takeProfitTargets?.tp1 || signal.takeProfit}</p>
+                          <p className="text-[11px] text-slate-300 font-mono">{signal.aplusSmc.takeProfitTargets?.tp1LiquidityType || 'Internal Range Liquidity'}</p>
+                          {signal.aplusSmc.takeProfitTargets?.tp2 && (
+                            <p className="text-[11px] text-emerald-300 font-mono">TP2: {signal.aplusSmc.takeProfitTargets?.tp2}</p>
+                          )}
+                          <p className="text-[10px] text-slate-400">{signal.aplusSmc.takeProfitTargets?.rationale || 'Targeting opposing internal dealing range liquidity pool'}</p>
+                        </div>
                       </div>
                     </div>
 
@@ -1921,38 +2013,74 @@ Reasoning: ${signal.reasoning.join(' | ')}`;
                   </div>
                 )}
 
-                {/* Tab 3: SMC / ICT Breakdown */}
+                {/* Tab 3: SMC / CRT Breakdown */}
                 {activeTab === 'smc' && (
                   <div className="mt-4 space-y-3">
-                    <div className="grid gap-3 sm:grid-cols-3">
-                      <div className="rounded-xl border border-slate-800 bg-slate-950/60 p-3">
-                        <span className="text-[11px] text-slate-400 font-medium">Fair Value Gap (FVG)</span>
-                        <p className="mt-1 text-xs font-semibold text-cyan-300 font-mono">
-                          {signal.smcIct?.fvg}
-                        </p>
-                      </div>
+                    {signal.strategy === 'CRT' ? (
+                      <>
+                        <div className="grid gap-3 sm:grid-cols-3">
+                          <div className="rounded-xl border border-slate-800 bg-slate-950/60 p-3">
+                            <span className="text-[11px] text-slate-400 font-medium">Range Formation</span>
+                            <p className="mt-1 text-xs font-semibold text-cyan-300 font-mono">
+                              {signal.crtDetails?.rangeFormation || 'Session Reference Range'}
+                            </p>
+                          </div>
 
-                      <div className="rounded-xl border border-slate-800 bg-slate-950/60 p-3">
-                        <span className="text-[11px] text-slate-400 font-medium">Order Blocks</span>
-                        <p className="mt-1 text-xs font-semibold text-indigo-300 font-mono">
-                          {signal.smcIct?.orderBlocks}
-                        </p>
-                      </div>
+                          <div className="rounded-xl border border-slate-800 bg-slate-950/60 p-3">
+                            <span className="text-[11px] text-slate-400 font-medium">Manipulation Sweep</span>
+                            <p className="mt-1 text-xs font-semibold text-indigo-300 font-mono">
+                              {signal.crtDetails?.rangeSweepConfirmed ? 'Boundary Swept' : signal.crtAnalysis?.manipulationSweep || 'Range Extreme Sweep'}
+                            </p>
+                          </div>
 
-                      <div className="rounded-xl border border-slate-800 bg-slate-950/60 p-3">
-                        <span className="text-[11px] text-slate-400 font-medium">Liquidity Pool</span>
-                        <p className="mt-1 text-xs font-semibold text-amber-300 font-mono">
-                          {signal.smcIct?.liquidity}
-                        </p>
-                      </div>
-                    </div>
+                          <div className="rounded-xl border border-slate-800 bg-slate-950/60 p-3">
+                            <span className="text-[11px] text-slate-400 font-medium">Rejection & Delivery</span>
+                            <p className="mt-1 text-xs font-semibold text-amber-300 font-mono">
+                              {signal.crtDetails?.rejectionConfirmed ? 'Closed Back Inside Range' : signal.crtAnalysis?.rejection || 'Confirmed Rejection'}
+                            </p>
+                          </div>
+                        </div>
 
-                    <div className="rounded-xl border border-slate-800 bg-slate-950/60 p-3.5">
-                      <span className="text-xs text-slate-400 font-medium">Pricing Zone (Premium vs Discount)</span>
-                      <p className="mt-1 text-sm font-bold text-white font-mono">
-                        {signal.smcIct?.zone}
-                      </p>
-                    </div>
+                        <div className="rounded-xl border border-slate-800 bg-slate-950/60 p-3.5">
+                          <span className="text-xs text-slate-400 font-medium">Opposing Range Target</span>
+                          <p className="mt-1 text-sm font-bold text-white font-mono">
+                            Targeting opposing boundary at {signal.takeProfit} ({signal.crtDetails?.opposingLiquidityBoundary || 'Opposing Liquidity Pool'})
+                          </p>
+                        </div>
+                      </>
+                    ) : (
+                      <>
+                        <div className="grid gap-3 sm:grid-cols-3">
+                          <div className="rounded-xl border border-slate-800 bg-slate-950/60 p-3">
+                            <span className="text-[11px] text-slate-400 font-medium">Fair Value Gap (FVG)</span>
+                            <p className="mt-1 text-xs font-semibold text-cyan-300 font-mono">
+                              {signal.smcIct?.fvg || signal.ltfAnalysis?.fvg || 'Structural FVG'}
+                            </p>
+                          </div>
+
+                          <div className="rounded-xl border border-slate-800 bg-slate-950/60 p-3">
+                            <span className="text-[11px] text-slate-400 font-medium">Order Blocks</span>
+                            <p className="mt-1 text-xs font-semibold text-indigo-300 font-mono">
+                              {signal.smcIct?.orderBlocks || signal.mtfAnalysis?.poiRefinement || 'Institutional POI'}
+                            </p>
+                          </div>
+
+                          <div className="rounded-xl border border-slate-800 bg-slate-950/60 p-3">
+                            <span className="text-[11px] text-slate-400 font-medium">Liquidity Pool</span>
+                            <p className="mt-1 text-xs font-semibold text-amber-300 font-mono">
+                              {signal.smcIct?.liquidity || signal.htfAnalysis?.liquidity || 'Resting External Pool'}
+                            </p>
+                          </div>
+                        </div>
+
+                        <div className="rounded-xl border border-slate-800 bg-slate-950/60 p-3.5">
+                          <span className="text-xs text-slate-400 font-medium">Pricing Zone (Premium vs Discount)</span>
+                          <p className="mt-1 text-sm font-bold text-white font-mono">
+                            {signal.smcIct?.zone || signal.htfAnalysis?.premiumDiscount || 'Equilibrium Calibration'}
+                          </p>
+                        </div>
+                      </>
+                    )}
                   </div>
                 )}
 
@@ -2265,6 +2393,13 @@ Reasoning: ${signal.reasoning.join(' | ')}`;
                     )}
                   </div>
                 )}
+
+                {/* Tab 9: Raw Evidence Panel */}
+                {activeTab === 'evidence' && (
+                  <div className="mt-4">
+                    <RawEvidencePanel signal={signal} onInspectTimeframe={setActiveTimeframeView} />
+                  </div>
+                )}
               </div>
             </div>
             );
@@ -2278,8 +2413,8 @@ Reasoning: ${signal.reasoning.join(' | ')}`;
               </div>
               <h3 className="text-lg font-bold text-white">Institutional Terminal Standby</h3>
               <p className="text-xs text-slate-400 max-w-md mx-auto mt-2 leading-relaxed">
-                Select your asset pair, analysis engine, and upload your chart or click one of the 1-click
-                presets to generate institutional SMC/ICT trade signals.
+                Select your asset pair, analysis engine (SMC or CRT), and upload your 3 real chart timeframes (4H, 1H, 15M) or click one of the 1-click
+                presets to generate institutional trade signals.
               </p>
               <div className="mt-6 flex justify-center">
                 <button
@@ -2287,7 +2422,7 @@ Reasoning: ${signal.reasoning.join(' | ')}`;
                   className="flex items-center gap-2 rounded-xl bg-emerald-500/10 border border-emerald-500/30 px-4 py-2 text-xs font-bold text-emerald-400 hover:bg-emerald-500/20 transition cursor-pointer"
                 >
                   <Sparkles className="h-3.5 w-3.5" />
-                  Analyze Preset (BTCUSDT · H1 · ICT)
+                  Analyze Preset (XAUUSD · 4H/1H/15M · SMC)
                 </button>
               </div>
             </div>

@@ -61,9 +61,9 @@ export const LandingPage: React.FC<LandingPageProps> = ({ onOpenTerminal, onOpen
 
           {/* Primary Description */}
           <p className="mt-6 text-base text-slate-300 sm:text-lg md:text-xl max-w-3xl mx-auto font-normal leading-relaxed">
-            TradeGuard reads your chart the way a prop trader does — market structure, SMC / ICT setups,
-            liquidity, FVGs, session context, volatility, and risk. No generic recommendations. Every
-            signal is anchored to the exact pair, timeframe, and price action.
+            TradeGuard reads your chart the way an institutional prop trader does — multi-timeframe market structure,
+            SMC &amp; CRT setups, liquidity sweeps, order blocks, FVGs, and disciplined risk-to-reward. No generic recommendations.
+            Every signal is anchored to the exact pair, multi-timeframe confluence, and visible chart price scale.
           </p>
 
           {/* Primary Actions */}
@@ -115,7 +115,7 @@ export const LandingPage: React.FC<LandingPageProps> = ({ onOpenTerminal, onOpen
                 Engines
               </span>
               <p className="mt-1 text-sm font-bold text-white tracking-wide">
-                SMC • ICT • Price Action
+                SMC • CRT
               </p>
             </div>
 
@@ -188,9 +188,9 @@ export const LandingPage: React.FC<LandingPageProps> = ({ onOpenTerminal, onOpen
                 </div>
                 <span className="text-xs font-mono font-bold text-cyan-400">LAYER 03</span>
               </div>
-              <h3 className="text-lg font-bold text-white">SMC / ICT detection</h3>
+              <h3 className="text-lg font-bold text-white">SMC &amp; CRT detection</h3>
               <p className="mt-2 text-sm text-slate-400 leading-relaxed">
-                BOS, CHOCH, FVGs, order blocks, liquidity sweeps, premium / discount zones.
+                BOS, CHOCH/MSS, FVGs, order blocks, liquidity sweeps, range expansion &amp; rejection.
               </p>
             </div>
 
@@ -253,14 +253,14 @@ export const LandingPage: React.FC<LandingPageProps> = ({ onOpenTerminal, onOpen
 
           {/* Institutional Signal Ticket Card */}
           <div className="rounded-2xl border border-emerald-500/30 bg-gradient-to-b from-slate-900/90 to-[#0d121c] p-6 sm:p-8 shadow-2xl shadow-emerald-950/20">
-            {/* Header: BULLISH BTCUSDT · H1 · ICT with CONF 89% */}
+            {/* Header: BULLISH BTCUSDT · 15M · SMC with CONF 89% */}
             <div className="flex flex-wrap items-center justify-between gap-4 border-b border-slate-800 pb-6">
               <div className="flex items-center gap-3">
                 <span className="rounded-lg bg-emerald-500/20 border border-emerald-500/40 px-3 py-1 text-xs font-extrabold text-emerald-400 font-mono tracking-wider">
                   BULLISH
                 </span>
                 <span className="text-lg sm:text-xl font-extrabold text-white font-mono">
-                  BTCUSDT · H1 · ICT
+                  BTCUSDT · 15M · SMC
                 </span>
               </div>
 

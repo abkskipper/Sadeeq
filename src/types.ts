@@ -2,99 +2,154 @@ export type AssetClass = 'Forex' | 'Crypto' | 'Indices' | 'Commodities' | 'Stock
 
 export type Timeframe = 'M1' | 'M5' | 'M15' | 'M30' | 'H1' | 'H4' | 'D1' | 'W1' | 'MN';
 
-export type Strategy =
-  | 'SMC'
-  | 'ICT'
-  | 'CRT'
-  | 'Price Action'
-  | 'Trend Following'
-  | 'Breakout'
-  | 'Pullback'
-  | 'Range Trading'
-  | 'Momentum'
-  | 'Mean Reversion'
-  | 'Scalping'
-  | 'Swing Trading';
+// Production strategies are strictly SMC and CRT
+export type Strategy = 'SMC' | 'CRT';
+
+// Versioning constants
+export const TRADEGUARD_ENGINE_VERSION = 'TG-CORE-1.0';
+export const TRADEGUARD_PROMPT_VERSION = 'TG-SMC-CRT-1.0';
+export const TRADEGUARD_SCHEMA_VERSION = 'TG-ANALYSIS-1.0';
+export const TRADEGUARD_MODEL_DEFAULT = 'gemini-3.6-flash';
 
 export type TradeBias = 'BULLISH' | 'BEARISH' | 'NEUTRAL';
 
-export type SetupGrade = 'A+' | 'A' | 'B' | 'C' | 'High Risk' | 'Avoid';
+export type SetupGrade = 'A+' | 'A' | 'B' | 'Developing' | 'Avoid' | 'NO_TRADE';
 
-export type ChartQuality = 'ANALYZABLE' | 'PARTIALLY ANALYZABLE' | 'UNREADABLE';
+export type AnalysisExecutionState =
+  | 'ANALYSIS_SUCCESS'
+  | 'ANALYSIS_NO_SETUP'
+  | 'ANALYSIS_FAILED'
+  | 'GEMINI_RATE_LIMIT'
+  | 'GEMINI_UNAVAILABLE'
+  | 'INVALID_CHART_INPUT'
+  | 'INVALID_MODEL_CONFIGURATION'
+  | 'INVALID_AI_RESPONSE'
+  | 'VALIDATION_FAILED';
 
-export type AplusSetupStatus = 'A+ CONFIRMED' | 'DEVELOPING' | 'NO VALID SETUP' | 'INSUFFICIENT EVIDENCE';
+export type ChartQuality = 'Readable' | 'Partially readable' | 'Unreadable' | 'ANALYZABLE' | 'PARTIALLY ANALYZABLE' | 'UNREADABLE';
+
+export type AplusSetupStatus =
+  | 'A+ SETUP'
+  | 'VALID SETUP'
+  | 'WAIT — NO VALID A+ SETUP'
+  | 'INVALID'
+  | 'A+ CONFIRMED'
+  | 'CONFIRMED'
+  | 'DEVELOPING'
+  | 'WAIT'
+  | 'NO VALID SETUP'
+  | 'INSUFFICIENT EVIDENCE'
+  | 'NO_SETUP';
 
 export interface AplusHtfZoneInfo {
   status: 'VALID' | 'INVALID' | 'UNCLEAR';
-  type: 'HTF Supply' | 'HTF Demand';
+  type: 'HTF Supply' | 'HTF Demand' | string;
+  zoneType?: 'SUPPLY' | 'DEMAND';
+  zoneHigh?: number | string;
+  zoneLow?: number | string;
   zoneRange: string;
-  upperBoundary: number | string;
-  lowerBoundary: number | string;
+  upperBoundary?: number | string;
+  lowerBoundary?: number | string;
   timeframe: string;
   structuralOrigin: string;
-  notes: string;
+  evidence?: string;
+  validity?: string;
+  notes?: string;
 }
 
 export interface AplusMitigationInfo {
-  status: 'FIRST MITIGATION' | 'RE-MITIGATION' | 'UNMITIGATED' | 'UNCLEAR';
+  status: 'FIRST MITIGATION' | 'RE-MITIGATION' | 'UNMITIGATED' | 'UNCLEAR' | 'CONFIRMED' | 'PENDING';
   entryDepth: string;
   reactionProduced: string;
   liquidityPresent: string;
+  evidence?: string;
+  candleVerification?: string;
 }
 
 export interface AplusInducementInfo {
-  status: 'IDENTIFIED' | 'NOT IDENTIFIED' | 'UNCLEAR';
+  status: 'IDENTIFIED' | 'NOT IDENTIFIED' | 'UNCLEAR' | 'AWAITING';
+  inducedDirection?: 'EARLY_SELLERS' | 'EARLY_BUYERS' | string;
   level: number | string;
   type: string;
+  purpose?: string;
   description: string;
+  evidence?: string;
 }
 
 export interface AplusLiquiditySweepInfo {
   status: 'CONFIRMED' | 'NOT CONFIRMED' | 'UNCLEAR';
   sweptLevel: number | string;
   sweepType: 'Buy-Side Liquidity Sweep' | 'Sell-Side Liquidity Sweep' | string;
+  liquidityType?: string;
+  sweepHigh?: number | string | null;
+  sweepLow?: number | string | null;
+  sweepLocation?: string;
+  relationshipToHTFZone?: string;
   wickVsBodyClose: string;
-  subsequentDelivery: string;
+  subsequentDelivery?: string;
   rejectionValidation: string;
+  evidence?: string;
+}
+
+export interface AplusHtfZoneValidation {
+  isValidated: boolean;
+  mitigationVerified: boolean;
+  sweepVerified: boolean;
+  validationRationale: string;
 }
 
 export interface AplusProtectedLevelInfo {
   type: 'PROTECTED HIGH' | 'PROTECTED LOW';
   price: number | string;
+  timeframe?: string;
+  reason?: string;
+  invalidationCondition?: string;
   causalConnection: string;
   invalidationRole: string;
 }
 
 export interface AplusFailureToSwingInfo {
-  status: 'CONFIRMED' | 'NOT CONFIRMED' | 'DEVELOPING';
-  attemptedSwingLevel: number | string;
+  status: 'CONFIRMED' | 'NOT CONFIRMED' | 'DEVELOPING' | 'AWAITING_SECOND_ATTEMPT' | 'FAILED';
+  attemptedSwingLevel?: number | string;
   failurePoint: number | string;
   triggerFailureLowHigh: number | string;
   structuralMechanism: string;
+  evidence?: string;
 }
 
 export interface AplusChangeInStateOfDeliveryInfo {
   status: 'CONFIRMED' | 'DEVELOPING' | 'NOT CONFIRMED';
-  shiftType: 'Bullish to Bearish' | 'Bearish to Bullish';
+  shiftType: 'Bullish to Bearish' | 'Bearish to Bullish' | string;
   responsibleCandleStructure: string;
   breakCloseLevel: number | string;
+  triggerLevel?: number | string;
   detailedSequence: string;
+  evidence?: string;
 }
 
 export interface AplusPoiInfo {
   status: 'VALID' | 'INVALID' | 'UNCLEAR';
-  type: 'Bearish Order Block' | 'Bullish Order Block' | 'Fair Value Gap (FVG)' | 'Breaker Block' | 'Displacement Origin';
+  type: 'Bearish Order Block' | 'Bullish Order Block' | 'Fair Value Gap (FVG)' | 'Breaker Block' | 'Displacement Origin' | string;
+  poiType?: string;
+  poiHigh?: number | string;
+  poiLow?: number | string;
   priceRange: string;
-  upperLevel: number | string;
-  lowerLevel: number | string;
+  upperLevel?: number | string;
+  lowerLevel?: number | string;
+  timeframe?: string;
+  origin?: string;
+  evidence?: string;
+  validity?: string;
   causalConnectionToDeliveryChange: string;
 }
 
 export interface AplusPoiMitigationInfo {
-  status: 'CONFIRMED' | 'PENDING' | 'NOT REACHED';
+  status: 'CONFIRMED' | 'PENDING' | 'NOT REACHED' | 'MITIGATED';
+  executionTimeframe?: string;
   retracementDepth: string;
   reactionConfirmation: string;
-  protectedStructureIntact: boolean;
+  protectedStructureIntact?: boolean;
+  evidence?: string;
 }
 
 export interface AplusSniperEntryInfo {
@@ -102,14 +157,16 @@ export interface AplusSniperEntryInfo {
   alternativeEntryPrice?: number | string;
   executionTimeframe: '15M' | 'H1' | string;
   confirmationType: string;
-  entryRationale: string;
+  entryRationale?: string;
   entryModelRank?: string;
 }
 
 export interface AplusInvalidationStopLossInfo {
   stopLossPrice: number | string;
   bufferAmount: number | string;
-  structureReference: string;
+  structureReference?: string;
+  protectedExtremeReference?: number | string;
+  structuralAnchorRole?: string;
   rationale: string;
 }
 
@@ -119,6 +176,7 @@ export interface AplusLiquidityTargetsInfo {
   tp2?: number | string;
   tp2LiquidityType?: 'External Range Liquidity' | 'Major Swing Low' | 'Major Swing High' | 'Opposing Liquidity Pool' | string;
   tp3?: number | string;
+  rationale?: string;
 }
 
 export interface AplusChecklistItem {
@@ -135,26 +193,36 @@ export interface AplusConfluenceComponent {
   evidence: string;
 }
 
+export interface EvidenceConfirmationItem {
+  name: string;
+  category: 'REQUIRED' | 'CONFIRMATORY' | 'OPTIONAL';
+  status: 'CONFIRMED' | 'DEVELOPING' | 'OPTIONAL' | 'NOT_VISIBLE' | 'FAILED';
+  evidence: string;
+  confidence: number;
+}
+
 export interface AplusConfluenceAudit {
-  score: number; // 0-12
+  score: number; // e.g. confirmed count
   confirmedCount: number;
-  totalComponents: 12;
+  totalComponents: number;
   grade: 'A+' | 'A' | 'B' | 'Developing' | 'Rejected / No Setup';
   isAplusQualified: boolean;
+  strategy?: Strategy;
   components: AplusConfluenceComponent[];
   summary: string;
   rejectionReason?: string;
 }
 
 export interface AplusSmcSequence {
-  direction: 'SELL' | 'BUY' | 'NEUTRAL';
-  setupGrade: 'A+' | 'A' | 'B' | 'Developing' | 'No Setup';
-  chartQuality: ChartQuality;
-  setupStatus: AplusSetupStatus;
+  direction?: 'SELL' | 'BUY' | 'NEUTRAL';
+  setupGrade?: 'A+' | 'A' | 'B' | 'Developing' | 'No Setup';
+  chartQuality?: ChartQuality;
+  setupStatus?: AplusSetupStatus;
   htfSupplyDemand: AplusHtfZoneInfo;
   htfMitigation: AplusMitigationInfo;
   inducement: AplusInducementInfo;
   liquiditySweep: AplusLiquiditySweepInfo;
+  htfZoneValidation?: AplusHtfZoneValidation;
   protectedLevel: AplusProtectedLevelInfo;
   failureToSwing: AplusFailureToSwingInfo;
   changeInStateOfDelivery: AplusChangeInStateOfDeliveryInfo;
@@ -415,26 +483,151 @@ export interface SignalValidationInfo {
   crossCheckResult?: string;
 }
 
+export interface CrtAnalysisDetails {
+  rangeFormation: string;
+  referenceHigh?: string | number;
+  referenceLow?: string | number;
+  rangeSweepConfirmed: boolean;
+  rejectionConfirmed: boolean;
+  ltfConfirmationConfirmed: boolean;
+  directionalIntent: string;
+  entryLevel?: string | number;
+  invalidationLevel?: string | number;
+  targetLevel?: string | number;
+  notes?: string;
+}
+
+export interface SmcAnalysisDetails {
+  htfSupplyDemandPresent: boolean;
+  poiPresent: boolean;
+  mitigationPresent: boolean;
+  inducementPresent: boolean;
+  liquiditySweepPresent: boolean;
+  protectedLevelPresent: boolean;
+  failureToSwingPresent: boolean;
+  cisdPresent: boolean;
+  displacementPresent: boolean;
+  bosChochPresent: boolean;
+  poiRefinementPresent: boolean;
+  entryConfirmed: boolean;
+  allCriticalConditionsMet: boolean;
+}
+
+export type InstitutionalStageState =
+  | 'Confirmed'
+  | 'Unconfirmed'
+  | 'Awaiting confirmation'
+  | 'Failed'
+  | 'Not observable from the uploaded chart';
+
+export type AnalysisStateMachineState =
+  | 'INSUFFICIENT_DATA'
+  | 'BIAS_ESTABLISHED'
+  | 'WAITING_FOR_ZONE'
+  | 'WAITING_FOR_MITIGATION'
+  | 'WAITING_FOR_LIQUIDITY_SWEEP'
+  | 'WAITING_FOR_PROTECTED_LEVEL'
+  | 'WAITING_FOR_FAILURE_TO_SWING'
+  | 'WAITING_FOR_CISD'
+  | 'WAITING_FOR_DISPLACEMENT'
+  | 'WAITING_FOR_POI'
+  | 'WAITING_FOR_RETEST'
+  | 'WAITING_FOR_ENTRY_TRIGGER'
+  | 'ENTRY_VALIDATED'
+  | 'SETUP_INVALIDATED';
+
+export interface InstitutionalChecklistStage {
+  stageNumber: number;
+  name: string;
+  state: InstitutionalStageState;
+  explanation: string;
+  chartEvidence: string;
+}
+
+export interface InstitutionalTradePlan {
+  direction: 'BUY' | 'SELL' | 'NO TRADE';
+  setupGrade: string;
+  entryZoneOrPrice: string | number;
+  entryTrigger?: string;
+  whyEntryIsNotLiquidity?: string;
+  stopLossPrice: string | number;
+  target1: string | number;
+  target2?: string | number;
+  target3?: string | number;
+  riskRewardTarget1: string;
+  riskRewardTarget2?: string;
+  riskRewardTarget3?: string;
+  protectedLevel: {
+    type: string;
+    price: string | number;
+    timeframe?: string;
+    reason?: string;
+    invalidationCondition?: string;
+  };
+  liquiditySweepLevel: string | number;
+  cisdReferenceLevel: string | number;
+  poiBoundaries: string;
+  setupInvalidationLevel: string | number;
+}
+
+export interface InstitutionalTradeNarrative {
+  chronologicalSequence: string[];
+  summary: string;
+  nextRequiredMarketAction: string;
+}
+
+export interface InstitutionalRejectionReason {
+  condition: string;
+  detail: string;
+  failedStage?: string;
+}
+
+export interface ConfidenceAndLimitations {
+  imageReadabilityConfidence: number; // 0-100
+  structuralInterpretationConfidence: number; // 0-100
+  setupCompletenessConfidence: number; // 0-100
+  priceMeasurementConfidence: number; // 0-100
+  overallConfidence: number; // 0-100
+  limitationsNotice: string;
+  calibrationDisclaimer: string;
+}
+
+export interface InstitutionalMarketOverview {
+  instrument: string;
+  analysisTimestamp: string;
+  selectedStrategy: string;
+  higherTimeframe: string;
+  middleTimeframe: string;
+  lowerTimeframe: string;
+  overallDirectionalBias: string;
+  setupStatus: string;
+}
+
 export interface TradeSignal {
   id: string;
   created_at: string;
   user_id?: string;
+  engineVersion?: string;
+  promptVersion?: string;
+  schemaVersion?: string;
+  modelVersion?: string;
   asset: string;
   assetClass: AssetClass;
   timeframe: Timeframe;
   strategy: Strategy;
   bias: TradeBias;
-  entry: string | number;
+  entry: string | number | null;
   alternativeEntry?: string | number;
-  stopLoss: string | number;
-  takeProfit: string | number;
-  takeProfit2?: string | number;
-  takeProfit3?: string | number;
+  stopLoss: string | number | null;
+  takeProfit: string | number | null;
+  takeProfit2?: string | number | null;
+  takeProfit3?: string | number | null;
   riskReward: string;
   confidence: number; // 0-100
   session: SessionName | string;
   priceAxisScale?: PriceAxisScale;
   reasoning: string[];
+  evidence?: string[];
   marketStructure: MarketStructureInfo;
   smcIct: SmcIctInfo;
   volatility: VolatilityInfo;
@@ -449,8 +642,13 @@ export interface TradeSignal {
   setupBadge: SetupGrade;
   chartQuality?: ChartQuality;
   setupStatus?: AplusSetupStatus;
+  analysisStatus?: 'SUCCESS' | 'NO_SETUP' | 'FAILED';
+  executionState?: AnalysisExecutionState;
   aplusSmc?: AplusSmcSequence;
   aplusConfluenceAudit?: AplusConfluenceAudit;
+  confirmationItems?: EvidenceConfirmationItem[];
+  crtDetails?: CrtAnalysisDetails;
+  smcDetails?: SmcAnalysisDetails;
   tradeManagement: TradeManagementInfo;
   explanation: ExplanationInfo;
   annotations: ChartAnnotation[];
@@ -473,6 +671,16 @@ export interface TradeSignal {
   modelUsed?: string;
   quotaNotice?: string;
   timings?: AnalysisTimings;
+  // Institutional A+ Formats
+  marketOverview?: InstitutionalMarketOverview;
+  institutionalChecklist?: InstitutionalChecklistStage[];
+  tradePlan?: InstitutionalTradePlan;
+  tradeNarrative?: InstitutionalTradeNarrative;
+  rejectionReasons?: InstitutionalRejectionReason[];
+  confidenceAndLimitations?: ConfidenceAndLimitations;
+  stateMachineState?: AnalysisStateMachineState;
+  whyEntryIsNotLiquidity?: string;
+  whatMustHappenNext?: string;
 }
 
 export interface WatchlistItem {
@@ -526,6 +734,15 @@ export interface AnalysisLog {
   duration: number; // in milliseconds
   aiStatus: 'OK' | 'RateLimited' | 'Error' | 'Fallback';
   error?: string;
+  modelUsed?: string;
+  modelVersion?: string;
+  promptVersion?: string;
+  schemaVersion?: string;
+  engineVersion?: string;
+  uploadedChartsCount?: number;
+  validationResult?: 'Passed' | 'Rejected' | 'Not Applicable';
+  validationNotes?: string;
+  finalSetupStatus?: string;
   timings?: AnalysisTimings;
   createdAt: string;
 }
