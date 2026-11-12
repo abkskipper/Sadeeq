@@ -28,6 +28,7 @@ import {
   Plus,
   Eye,
   SearchCode,
+  History,
 } from 'lucide-react';
 import {
   AssetClass,
@@ -46,9 +47,26 @@ import { AnnotatedChartCanvas } from './AnnotatedChartCanvas';
 import { RawEvidencePanel } from './RawEvidencePanel';
 import { InstitutionalResultsPanel } from './InstitutionalResultsPanel';
 import { normalizeChartImage } from '../utils/imageUtils';
+import { formatSafeSessionDate, inferTradingSession } from '../lib/tradeGuardEngine';
+
+export type AnalysisUiState =
+  | 'IDLE'
+  | 'UPLOADING'
+  | 'VALIDATING'
+  | 'QUEUED'
+  | 'ANALYSING'
+  | 'VALIDATING_RESULT'
+  | 'COMPLETED'
+  | 'UPLOAD_FAILED'
+  | 'PROVIDER_UNAVAILABLE'
+  | 'RATE_LIMITED'
+  | 'ANALYSIS_FAILED'
+  | 'INVALID_RESPONSE'
+  | 'EXPIRED';
 
 interface TerminalProps {
   user: UserProfile | null;
+  inspectedSignal?: TradeSignal | null;
   onOpenAuth: () => void;
   onSaveToWatchlist: (signal: TradeSignal) => void;
   isWatchlisted: (signalId: string) => boolean;
@@ -78,7 +96,9 @@ const TIMEFRAMES: Timeframe[] = [
 
 const STRATEGIES: Strategy[] = [
   'SMC',
+  'ICT',
   'CRT',
+  'Price Action',
 ];
 
 const POPULAR_PAIRS = [
@@ -190,6 +210,7 @@ export function resolveMultiTimeframeData(sig: TradeSignal): ResolvedMultiTimefr
 
 export const Terminal: React.FC<TerminalProps> = ({
   user,
+  inspectedSignal,
   onOpenAuth,
   onSaveToWatchlist,
   isWatchlisted,
@@ -208,6 +229,12 @@ export const Terminal: React.FC<TerminalProps> = ({
   const [mtfImage, setMtfImage] = useState<string>(initialMtfSet.mtf);
   const [ltfImage, setLtfImage] = useState<string>(initialMtfSet.ltf);
 
+  // Formal State Machine (Issue 5)
+  const [analysisState, setAnalysisState] = useState<AnalysisUiState>('IDLE');
+  const [lastFailedJobId, setLastFailedJobId] = useState<string | null>(null);
+  const [historicalSignal, setHistoricalSignal] = useState<TradeSignal | null>(null);
+  const [showHistoricalArchive, setShowHistoricalArchive] = useState(false);
+
   // Execution & Output State
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const isAnalyzingRef = useRef(false);
@@ -219,6 +246,223 @@ export const Terminal: React.FC<TerminalProps> = ({
   const [activeTab, setActiveTab] = useState<'institutional' | 'aplus' | 'reasoning' | 'structure' | 'smc' | 'volatility' | 'risk' | 'scores' | 'mtf' | 'validation' | 'evidence'>('institutional');
   const [activeTimeframeView, setActiveTimeframeView] = useState<'LTF' | 'MTF' | 'HTF'>('LTF');
   const [copied, setCopied] = useState(false);
+
+  // Inspect historical signal from external prop if provided
+  useEffect(() => {
+    if (inspectedSignal) {
+      setSignal(inspectedSignal);
+      setAsset(inspectedSignal.asset);
+      setStrategy(inspectedSignal.strategy);
+      setAnalysisState('COMPLETED');
+      setErrorMsg(null);
+    }
+  }, [inspectedSignal]);
+
+  // Asynchronous Job & Real-time Progress State
+  const [activeJobId, setActiveJobId] = useState<string | null>(null);
+  const [activeJobMessage, setActiveJobMessage] = useState<string | null>(null);
+  const [activeProgressPercent, setActiveProgressPercent] = useState<number>(0);
+  const activePollRef = useRef<number | null>(null);
+
+  // 7 genuine institutional analysis passes description
+  const ANALYSIS_STEPS = [
+    'Pass 1: Price Axis Calibration & Ground Truth Scale Reading...',
+    'Pass 2: Aspect Ratio Preservation & Candle Wick Resolution...',
+    'Pass 3: Multi-Timeframe Prompt Formulation & Causal Rules...',
+    'Pass 4: Vision Model Execution (HTF POI, Sweeps, CISD, Displacement)...',
+    'Pass 5: Response Schema Parsing & Ground Truth Price Verification...',
+    'Pass 6: 13 Stage-Gate Checks (Protected Levels, Sweep Separation, SL/TP)...',
+    'Pass 7: Dossier Finalization, Invalidation Buffers & Report Persistence...',
+  ];
+
+  const stopMonitoring = () => {
+    if (activePollRef.current) {
+      clearInterval(activePollRef.current);
+      activePollRef.current = null;
+    }
+  };
+
+  const handleCancelAnalysis = async () => {
+    stopMonitoring();
+    const currentJob = activeJobId || (typeof localStorage !== 'undefined' ? localStorage.getItem('tradeguard_active_job_id') : null);
+    if (currentJob) {
+      try {
+        await fetch(`/api/analysis/jobs/${currentJob}/cancel`, { method: 'POST' });
+      } catch (e) {
+        console.warn('Cancel error:', e);
+      }
+    }
+    try {
+      localStorage.removeItem('tradeguard_active_job_id');
+    } catch {}
+    setActiveJobId(null);
+    setActiveJobMessage(null);
+    setActiveProgressPercent(0);
+    setIsAnalyzing(false);
+    isAnalyzingRef.current = false;
+    setErrorMsg('Institutional analysis cancelled by user.');
+  };
+
+  const startJobMonitoring = (jobId: string) => {
+    setActiveJobId(jobId);
+    try {
+      localStorage.setItem('tradeguard_active_job_id', jobId);
+    } catch {}
+
+    stopMonitoring();
+
+    let consecutiveFailures = 0;
+    const maxPollAttempts = 80;
+    let attempts = 0;
+
+    const pollJob = async () => {
+      attempts++;
+      if (attempts > maxPollAttempts) {
+        stopMonitoring();
+        setIsAnalyzing(false);
+        isAnalyzingRef.current = false;
+        try { localStorage.removeItem('tradeguard_active_job_id'); } catch {}
+        setErrorMsg('Institutional analysis exceeded the 120-second processing window. Please try again.');
+        return;
+      }
+
+      try {
+        const res = await fetch(`/api/analysis/jobs/${jobId}`, {
+          headers: {
+            Authorization: user ? `Bearer ${user.id}` : 'Bearer usr_trader_demo',
+          },
+        });
+
+        if (!res.ok) {
+          consecutiveFailures++;
+          if (consecutiveFailures > 6) {
+            stopMonitoring();
+            setIsAnalyzing(false);
+            isAnalyzingRef.current = false;
+            setErrorMsg('Unable to retrieve analysis status from TradeGuard server.');
+          }
+          return;
+        }
+
+        consecutiveFailures = 0;
+        const data = await res.json();
+        const job = data?.job;
+
+        if (!job) return;
+
+        if (typeof job.stageIndex === 'number') {
+          setAnalysisStep(Math.min(job.stageIndex, ANALYSIS_STEPS.length - 1));
+        }
+        if (job.stageMessage) {
+          setActiveJobMessage(job.stageMessage);
+        }
+        if (typeof job.progressPercent === 'number') {
+          setActiveProgressPercent(job.progressPercent);
+        }
+
+        if (job.status === 'COMPLETED') {
+          stopMonitoring();
+          try { localStorage.removeItem('tradeguard_active_job_id'); } catch {}
+          setActiveJobId(null);
+          setLastFailedJobId(null);
+          setIsAnalyzing(false);
+          isAnalyzingRef.current = false;
+          setAnalysisState('COMPLETED');
+          if (job.signal) {
+            setSignal(job.signal);
+            setHistoricalSignal(job.signal);
+            if (onSignalGenerated) {
+              onSignalGenerated(job.signal);
+            }
+          }
+        } else if (job.status === 'FAILED') {
+          stopMonitoring();
+          try { localStorage.removeItem('tradeguard_active_job_id'); } catch {}
+          setLastFailedJobId(job.id);
+          setActiveJobId(null);
+          setIsAnalyzing(false);
+          isAnalyzingRef.current = false;
+          // CRITICAL (Issue 2): Clear active signal on failure so stale results never stick
+          setSignal(null);
+
+          const err = job.error;
+          const errCode = err?.code || 'ANALYSIS_FAILED';
+          const rawMsg = err?.message || 'Institutional chart analysis failed.';
+
+          if (errCode === 'RATE_LIMITED' || rawMsg.includes('Demand Surge') || rawMsg.includes('429')) {
+            setAnalysisState('RATE_LIMITED');
+            setRateLimitActive(true);
+            setQuotaExhaustedActive(false);
+          } else if (errCode === 'PROVIDER_UNAVAILABLE' || rawMsg.includes('high demand') || rawMsg.includes('503')) {
+            setAnalysisState('PROVIDER_UNAVAILABLE');
+            setRateLimitActive(false);
+            setQuotaExhaustedActive(false);
+          } else if (errCode === 'QUOTA_EXHAUSTED' || rawMsg.includes('Quota')) {
+            setAnalysisState('RATE_LIMITED');
+            setQuotaExhaustedActive(true);
+            setRateLimitActive(false);
+          } else {
+            setAnalysisState('ANALYSIS_FAILED');
+          }
+          setErrorMsg(rawMsg);
+        } else if (job.status === 'CANCELLED') {
+          stopMonitoring();
+          try { localStorage.removeItem('tradeguard_active_job_id'); } catch {}
+          setActiveJobId(null);
+          setIsAnalyzing(false);
+          isAnalyzingRef.current = false;
+          setAnalysisState('IDLE');
+          setSignal(null);
+          setErrorMsg('Institutional analysis cancelled by user.');
+        }
+      } catch {
+        consecutiveFailures++;
+        if (consecutiveFailures > 6) {
+          stopMonitoring();
+          setIsAnalyzing(false);
+          isAnalyzingRef.current = false;
+          setAnalysisState('ANALYSIS_FAILED');
+          setSignal(null);
+          setErrorMsg('Network interruption while monitoring analysis job.');
+        }
+      }
+    };
+
+    activePollRef.current = window.setInterval(pollJob, 1500);
+    pollJob();
+  };
+
+  // Controlled Retry Action (Issue 1)
+  const handleRetryAnalysis = async () => {
+    if (isAnalyzing || isAnalyzingRef.current) return;
+    setErrorMsg(null);
+    setRateLimitActive(false);
+    setQuotaExhaustedActive(false);
+    setSignal(null);
+
+    if (lastFailedJobId) {
+      try {
+        setIsAnalyzing(true);
+        isAnalyzingRef.current = true;
+        setAnalysisState('QUEUED');
+        const res = await fetch(`/api/analysis/jobs/${lastFailedJobId}/retry`, {
+          method: 'POST',
+          headers: {
+            Authorization: user ? `Bearer ${user.id}` : 'Bearer usr_trader_demo',
+          },
+        });
+        const data = await res.json();
+        if (data.success && data.jobId) {
+          startJobMonitoring(data.jobId);
+          return;
+        }
+      } catch (e) {
+        console.warn('Job retry error, falling back to full submission:', e);
+      }
+    }
+    // Fallback to fresh submission
+    handleRunAnalysis();
+  };
 
   // Safe AI Engine Health & Readiness Status (Requirement 12)
   const [engineStatus, setEngineStatus] = useState<{
@@ -267,22 +511,42 @@ export const Terminal: React.FC<TerminalProps> = ({
     };
   }, []);
 
-  // 7 analysis passes description for the institutional loading overlay
-  const ANALYSIS_STEPS = [
-    'Pass 1: Price Axis Calibration & Ground Truth Scale Reading...',
-    'Pass 2: HTF Supply / Demand Zone & Structural Mitigation...',
-    'Pass 3: Inducement Detection & Liquidity Sweep Audit...',
-    'Pass 4: Protected High / Low & Failure To Swing Analysis...',
-    'Pass 5: Change In State Of Delivery (CSD) & Causal POI Mapping...',
-    'Pass 6: 15M POI Mitigation & Lower-Timeframe Sniper Entry...',
-    'Pass 7: Invalidation SL Buffer & Liquidity Targets (TP1/TP2)...',
-  ];
+  // Auto-restore in-flight analysis job or latest validated signal after refresh
+  useEffect(() => {
+    let savedJobId: string | null = null;
+    try {
+      savedJobId = localStorage.getItem('tradeguard_active_job_id');
+    } catch {}
+
+    if (savedJobId) {
+      setIsAnalyzing(true);
+      isAnalyzingRef.current = true;
+      startJobMonitoring(savedJobId);
+    } else {
+      fetch('/api/analysis/recent', {
+        headers: {
+          Authorization: user ? `Bearer ${user.id}` : 'Bearer usr_trader_demo',
+        },
+      })
+        .then(res => res.json())
+        .then(data => {
+          if (data?.success && Array.isArray(data.signals) && data.signals.length > 0) {
+            setHistoricalSignal(data.signals[0]);
+          }
+        })
+        .catch(() => {});
+    }
+
+    return () => {
+      stopMonitoring();
+    };
+  }, []);
 
   // Handle preset sample selection
   const handleSelectSample = async (preset: typeof SAMPLE_CHARTS[0]) => {
     setAsset(preset.asset);
     setAssetClass(preset.assetClass);
-    setStrategy(preset.strategy === 'CRT' ? 'CRT' : 'SMC');
+    setStrategy(preset.strategy);
     setErrorMsg(null);
     setRateLimitActive(false);
 
@@ -336,10 +600,14 @@ export const Terminal: React.FC<TerminalProps> = ({
     setRateLimitActive(false);
     setQuotaExhaustedActive(false);
     setErrorMsg(null);
+    setSignal(null);
+    setShowHistoricalArchive(false);
+    setAnalysisState('UPLOADING');
 
     // Validate inputs
     if (!asset.trim()) {
       setErrorMsg('Please specify an asset/pair symbol (e.g. BTCUSDT, EURUSD, XAUUSD).');
+      setAnalysisState('UPLOAD_FAILED');
       isAnalyzingRef.current = false;
       setIsAnalyzing(false);
       return;
@@ -347,6 +615,7 @@ export const Terminal: React.FC<TerminalProps> = ({
 
     if (!htfImage || !mtfImage || !ltfImage) {
       setErrorMsg('THREE REAL CHART IMAGES REQUIRED: TradeGuard strictly requires 4H (Higher Timeframe), 1H (Middle Timeframe), and 15M (Lower Timeframe) chart images. Single-chart analysis and fabricated levels are disabled.');
+      setAnalysisState('UPLOAD_FAILED');
       isAnalyzingRef.current = false;
       setIsAnalyzing(false);
       return;
@@ -374,17 +643,11 @@ export const Terminal: React.FC<TerminalProps> = ({
     ];
 
     setAnalysisStep(0);
-
-    // Step simulation interval for visual feedback
-    const stepInterval = setInterval(() => {
-      setAnalysisStep(prev => {
-        if (prev < ANALYSIS_STEPS.length - 1) return prev + 1;
-        return prev;
-      });
-    }, 450);
+    setActiveProgressPercent(10);
+    setActiveJobMessage('Pass 1: Calibrating price scale & validating 3-timeframe chart evidence...');
 
     try {
-      // Normalize all images to crisp lightweight PNGs
+      // Normalize all images preserving exact aspect ratios
       const chartsPayload: ChartImageInput[] = await Promise.all(
         rawChartsPayload.map(async (c) => {
           if (!c.imageBase64) return c;
@@ -397,138 +660,38 @@ export const Terminal: React.FC<TerminalProps> = ({
         })
       );
 
-      // Clean single analysis request with comprehensive timeout (Requirement 10)
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 65000);
+      // Generate client-side idempotency key based on chart image data lengths & asset
+      const idempotencyKey = `${asset.toUpperCase().trim()}_${strategy}_${htfImage.length}_${mtfImage.length}_${ltfImage.length}_${Math.floor(Date.now() / 20000)}`;
 
-      let response: Response | null = null;
-      try {
-        response = await fetch('/api/analyzeChart', {
-          method: 'POST',
-          signal: controller.signal,
-          headers: {
-            'Content-Type': 'application/json',
-            Authorization: user ? `Bearer ${user.id}` : 'Bearer usr_trader_demo',
-          },
-          body: JSON.stringify({
-            asset: asset.toUpperCase().trim(),
-            assetClass,
-            timeframe: '15M',
-            strategy: strategy === 'CRT' ? 'CRT' : 'SMC',
-            charts: chartsPayload,
-            accountBalance,
-            riskPercent,
-            userId: user?.id || 'usr_trader_demo',
-          }),
-        });
-      } catch (fetchErr: any) {
-        clearInterval(stepInterval);
-        clearTimeout(timeoutId);
-        if (fetchErr.name === 'AbortError') {
-          throw new Error('Analysis timed out while processing institutional charts. Please try again.');
-        }
-        throw new Error('Network error: Unable to communicate with TradeGuard server.');
-      } finally {
-        clearTimeout(timeoutId);
+      const submitRes = await fetch('/api/analysis/submit', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: user ? `Bearer ${user.id}` : 'Bearer usr_trader_demo',
+        },
+        body: JSON.stringify({
+          asset: asset.toUpperCase().trim(),
+          assetClass,
+          timeframe: '15M',
+          strategy,
+          charts: chartsPayload,
+          accountBalance,
+          riskPercent,
+          userId: user?.id || 'usr_trader_demo',
+          idempotencyKey,
+        }),
+      });
+
+      const data = await submitRes.json();
+      if (!submitRes.ok || !data?.success || !data?.jobId) {
+        const errMsg = data?.error?.message || data?.error || `Analysis submission failed (HTTP ${submitRes.status}).`;
+        throw new Error(errMsg);
       }
 
-      clearInterval(stepInterval);
-
-      if (!response) {
-        throw new Error('No response received from TradeGuard analysis server.');
-      }
-
-      // Safe JSON / text body parsing
-      let data: any = null;
-      const contentType = response.headers.get('content-type') || '';
-
-      if (contentType.includes('application/json')) {
-        try {
-          data = await response.json();
-        } catch {
-          data = null;
-        }
-      } else {
-        const rawBodyText = await response.text();
-        console.warn('Non-JSON server response received:', response.status, rawBodyText.slice(0, 300));
-      }
-
-      // Error handling with exact status and code mapping (Requirements 7, 9, 10, 11)
-      if (!response.ok || !data?.success) {
-        const errCode = data?.errorCode || (typeof data?.error === 'object' && data?.error !== null ? data.error.code : null) || (
-          response.status === 404 ? 'MODEL_NOT_FOUND' :
-          response.status === 401 ? 'AUTHENTICATION_ERROR' :
-          response.status === 403 ? 'PERMISSION_ERROR' :
-          response.status === 429 ? 'RATE_LIMIT' :
-          response.status === 503 ? 'SERVER_ERROR' :
-          response.status === 504 ? 'TIMEOUT' :
-          response.status === 400 ? 'INVALID_CHART_INPUT' :
-          'ANALYSIS_FAILED'
-        );
-        const retryAfter = data?.retryAfter || (typeof data?.error === 'object' ? data?.error?.retryAfter : null);
-        const rawMsg = typeof data?.error === 'string' ? data.error : data?.error?.message;
-
-        let userMessage = '';
-        switch (errCode) {
-          case 'QUOTA_EXHAUSTED':
-          case 'GEMINI_QUOTA_EXHAUSTED':
-            setQuotaExhaustedActive(true);
-            setRateLimitActive(false);
-            userMessage = rawMsg || 'Gemini Quota Exhausted: You exceeded your current quota, please check your plan and billing details.';
-            break;
-          case 'RATE_LIMIT':
-          case 'GEMINI_RATE_LIMIT':
-          case 'RATE_LIMITED':
-            setRateLimitActive(true);
-            setQuotaExhaustedActive(false);
-            userMessage = retryAfter
-              ? `Gemini Rate Limit: Quota rate limit reached (retry in ~${retryAfter}s). ${rawMsg || ''}`
-              : (rawMsg || 'Gemini rate limit reached. Please wait a moment before retrying.');
-            break;
-          case 'SERVER_ERROR':
-          case 'GEMINI_UNAVAILABLE':
-          case 'SERVICE_UNAVAILABLE':
-            userMessage = rawMsg || 'Gemini service is temporarily experiencing high demand. Please click Retry Institutional Analysis.';
-            break;
-          case 'AUTHENTICATION_ERROR':
-            userMessage = rawMsg || 'Gemini API authentication failed. Check the configured API key.';
-            break;
-          case 'PERMISSION_ERROR':
-            userMessage = rawMsg || 'Gemini API permission denied. Check project permissions.';
-            break;
-          case 'CONFIGURATION_ERROR':
-            userMessage = rawMsg || 'TradeGuard configuration error: Required environment variables are missing.';
-            break;
-          case 'GEMINI_MODEL_UNAVAILABLE':
-          case 'INVALID_MODEL_CONFIGURATION':
-          case 'MODEL_NOT_FOUND':
-            userMessage = rawMsg || 'Configured TradeGuard model is not available.';
-            break;
-          case 'TIMEOUT':
-            userMessage = rawMsg || 'Gemini analysis request timed out.';
-            break;
-          case 'INVALID_CHART_INPUT':
-          case 'THREE_TIMEFRAMES_REQUIRED':
-            userMessage = rawMsg || 'Three timeframe charts (4H, 1H, 15M) are required.';
-            break;
-          case 'INVALID_AI_RESPONSE':
-            userMessage = rawMsg || 'The AI model output could not be parsed as structured market analysis.';
-            break;
-          default:
-            userMessage = rawMsg || `TradeGuard analysis failed (HTTP ${response.status}).`;
-            break;
-        }
-
-        throw new Error(userMessage);
-      }
-
-      setSignal(data.signal);
-      if (onSignalGenerated) {
-        onSignalGenerated(data.signal);
-      }
+      // Begin polling / streaming genuine progress states from backend
+      startJobMonitoring(data.jobId);
     } catch (err: any) {
-      clearInterval(stepInterval);
-      console.warn('Analysis execution notice:', err?.message || err);
+      console.warn('Analysis submission error:', err?.message || err);
       if (err?.message?.includes('QUOTA') || err?.message?.includes('Quota') || err?.message?.includes('exceeded your current quota') || err?.message?.includes('billing details')) {
         setQuotaExhaustedActive(true);
         setRateLimitActive(false);
@@ -537,7 +700,6 @@ export const Terminal: React.FC<TerminalProps> = ({
         setQuotaExhaustedActive(false);
       }
       setErrorMsg(err.message || 'Analysis failed. Please check your chart image and try again.');
-    } finally {
       isAnalyzingRef.current = false;
       setIsAnalyzing(false);
     }
@@ -797,7 +959,7 @@ Reasoning: ${signal.reasoning.join(' | ')}`;
                 <span className="text-[10px] font-mono text-slate-400">All 3 Required</span>
               </div>
 
-              <div className="grid grid-cols-3 gap-2">
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
                 {([
                   { role: 'HTF' as const, label: '4H Chart', desc: 'Macro Trend', img: htfImage },
                   { role: 'MTF' as const, label: '1H Chart', desc: 'Structure', img: mtfImage },
@@ -805,7 +967,7 @@ Reasoning: ${signal.reasoning.join(' | ')}`;
                 ]).map(({ role, label, desc, img }) => (
                   <div
                     key={role}
-                    className="rounded-xl border border-slate-800 bg-slate-950 p-2.5 text-center"
+                    className="rounded-xl border border-slate-800 bg-slate-950 p-2.5 text-center min-w-0 overflow-hidden shadow-sm"
                   >
                     <div className="flex items-center justify-between mb-1.5">
                       <span className="text-[11px] font-mono font-black text-emerald-400">
@@ -821,7 +983,7 @@ Reasoning: ${signal.reasoning.join(' | ')}`;
                         <img
                           src={img}
                           alt={label}
-                          className="h-20 w-full object-cover rounded-lg border border-slate-800"
+                          className="h-24 sm:h-20 w-full object-cover rounded-lg border border-slate-800"
                         />
                         <label className="absolute inset-0 bg-black/75 opacity-0 group-hover:opacity-100 flex items-center justify-center cursor-pointer text-xs font-mono font-bold text-white transition rounded-lg">
                           Replace
@@ -834,7 +996,7 @@ Reasoning: ${signal.reasoning.join(' | ')}`;
                         </label>
                       </div>
                     ) : (
-                      <label className="h-20 flex flex-col items-center justify-center border border-dashed border-slate-700 rounded-lg cursor-pointer hover:border-emerald-500/60 hover:bg-slate-900/50 transition">
+                      <label className="h-24 sm:h-20 flex flex-col items-center justify-center border border-dashed border-slate-700 rounded-lg cursor-pointer hover:border-emerald-500/60 hover:bg-slate-900/50 transition">
                         <Plus className="h-4 w-4 text-slate-400" />
                         <span className="text-[10px] font-mono text-slate-300 font-semibold mt-1">Upload {label}</span>
                         <input
@@ -850,13 +1012,28 @@ Reasoning: ${signal.reasoning.join(' | ')}`;
               </div>
             </div>
 
-            {/* Error Message */}
+            {/* Error Message & Failed Status Badge (Issue 1 & 2) */}
             {errorMsg && (
-              <div className="flex flex-col gap-2 rounded-xl bg-rose-950/40 border border-rose-900/50 p-3 text-xs text-rose-300">
-                <div className="flex items-start gap-2">
+              <div className="flex flex-col gap-2 rounded-xl bg-rose-950/40 border border-rose-900/50 p-3.5 text-xs text-rose-300 shadow-md">
+                <div className="flex items-start gap-2.5">
                   <AlertTriangle className="h-4 w-4 shrink-0 text-rose-400 mt-0.5" />
-                  <span className="font-semibold leading-relaxed">{errorMsg}</span>
+                  <div className="min-w-0 flex-1">
+                    <div className="flex items-center gap-2 mb-1">
+                      <span className="font-mono font-black text-[10px] uppercase px-1.5 py-0.5 rounded bg-rose-500/20 text-rose-300 border border-rose-500/40">
+                        {analysisState === 'PROVIDER_UNAVAILABLE'
+                          ? 'DEMAND SURGE'
+                          : analysisState === 'RATE_LIMITED'
+                          ? 'RATE LIMITED'
+                          : 'FAILED'}
+                      </span>
+                      <span className="text-[10px] font-mono text-rose-400/80">
+                        Institutional Inference Interrupted
+                      </span>
+                    </div>
+                    <span className="font-semibold leading-relaxed break-words block">{errorMsg}</span>
+                  </div>
                 </div>
+
                 {quotaExhaustedActive && (
                   <div className="mt-1 pt-2 border-t border-rose-900/40 text-[11px] text-rose-200/90 leading-relaxed">
                     <p className="font-medium text-rose-100 mb-1">Upstream Google Gemini Quota Exhausted:</p>
@@ -867,56 +1044,74 @@ Reasoning: ${signal.reasoning.join(' | ')}`;
                     </ul>
                   </div>
                 )}
-                {!quotaExhaustedActive && (errorMsg.includes('high demand') || errorMsg.includes('Spikes in demand') || errorMsg.includes('temporarily unavailable') || errorMsg.includes('temporarily overloaded') || errorMsg.includes('Service Error') || errorMsg.includes('High Demand') || errorMsg.includes('SERVER_ERROR')) && (
+
+                {rateLimitActive && !quotaExhaustedActive && (
+                  <div className="mt-1 pt-2 border-t border-amber-900/40 text-[11px] text-amber-200/90 leading-relaxed">
+                    <p className="font-medium text-amber-100 mb-1">Gemini Rate Limit (RPM / Concurrency):</p>
+                    <p className="text-amber-300/80">
+                      The upstream Gemini API per-minute request rate limit was reached. The engine automatically retried with backoff. Click <strong>Retry Institutional Analysis</strong> below to retry.
+                    </p>
+                  </div>
+                )}
+
+                {!quotaExhaustedActive && !rateLimitActive && (errorMsg.includes('high demand') || errorMsg.includes('Spikes in demand') || errorMsg.includes('temporarily unavailable') || errorMsg.includes('temporarily overloaded') || errorMsg.includes('Service Error') || errorMsg.includes('High Demand') || errorMsg.includes('SERVER_ERROR') || analysisState === 'PROVIDER_UNAVAILABLE') && (
                   <div className="mt-1 pt-2 border-t border-rose-900/40 text-[11px] text-rose-200/90 leading-relaxed">
                     <p className="font-medium text-rose-100 mb-1">Temporary Gemini Server Demand Surge:</p>
                     <p className="text-rose-300/80">
-                      Google's AI model servers are experiencing a brief spike in global traffic. Demand surges are temporary—click <strong>Retry Institutional Analysis</strong> below to submit your multi-timeframe evaluation.
+                      Google's AI model servers are experiencing a brief spike in global traffic. Demand surges are temporary—click <strong>Retry Institutional Analysis</strong> below to re-submit your multi-timeframe charts.
                     </p>
                   </div>
                 )}
               </div>
             )}
 
-            {/* Submit Action Button (Requirement 9) */}
-            <button
-              onClick={handleRunAnalysis}
-              disabled={isAnalyzing}
-              className={`w-full flex items-center justify-center gap-2 rounded-xl py-3.5 text-sm font-bold shadow-lg transition cursor-pointer disabled:opacity-50 ${
-                quotaExhaustedActive && !isAnalyzing
-                  ? 'bg-rose-500 hover:bg-rose-400 text-slate-950 shadow-rose-500/25'
-                  : rateLimitActive && !isAnalyzing
-                  ? 'bg-amber-500 hover:bg-amber-400 text-slate-950 shadow-amber-500/25'
-                  : 'bg-emerald-500 hover:bg-emerald-400 text-slate-950 shadow-emerald-500/25 active:scale-[0.99]'
-              }`}
-            >
-              {isAnalyzing ? (
-                <>
-                  <RefreshCw className="h-4 w-4 animate-spin text-slate-950" />
-                  ANALYZING...
-                </>
-              ) : quotaExhaustedActive ? (
-                <>
-                  <AlertTriangle className="h-4 w-4 fill-slate-950" />
-                  GEMINI QUOTA EXHAUSTED
-                </>
-              ) : rateLimitActive ? (
-                <>
-                  <AlertTriangle className="h-4 w-4 fill-slate-950" />
-                  GEMINI RATE LIMIT
-                </>
-              ) : errorMsg && (errorMsg.includes('high demand') || errorMsg.includes('Spikes in demand') || errorMsg.includes('temporarily unavailable') || errorMsg.includes('temporarily overloaded') || errorMsg.includes('Service Error') || errorMsg.includes('High Demand') || errorMsg.includes('SERVER_ERROR')) ? (
-                <>
-                  <RefreshCw className="h-4 w-4 text-slate-950" />
-                  Retry Institutional Analysis
-                </>
-              ) : (
-                <>
-                  <Sparkles className="h-4 w-4 fill-slate-950" />
-                  Run Institutional Analysis
-                </>
+            {/* Submit / Controlled Retry Action Buttons (Requirements 1, 2, 9) */}
+            <div className="space-y-2">
+              <button
+                onClick={lastFailedJobId ? handleRetryAnalysis : handleRunAnalysis}
+                disabled={isAnalyzing}
+                className={`w-full flex items-center justify-center gap-2 rounded-xl py-3.5 text-sm font-bold shadow-lg transition cursor-pointer disabled:opacity-50 ${
+                  quotaExhaustedActive && !isAnalyzing
+                    ? 'bg-rose-500 hover:bg-rose-400 text-slate-950 shadow-rose-500/25'
+                    : rateLimitActive && !isAnalyzing
+                    ? 'bg-amber-500 hover:bg-amber-400 text-slate-950 shadow-amber-500/25'
+                    : errorMsg
+                    ? 'bg-emerald-500 hover:bg-emerald-400 text-slate-950 shadow-emerald-500/25 active:scale-[0.99]'
+                    : 'bg-emerald-500 hover:bg-emerald-400 text-slate-950 shadow-emerald-500/25 active:scale-[0.99]'
+                }`}
+              >
+                {isAnalyzing ? (
+                  <>
+                    <RefreshCw className="h-4 w-4 animate-spin text-slate-950" />
+                    ANALYZING...
+                  </>
+                ) : errorMsg ? (
+                  <>
+                    <RefreshCw className="h-4 w-4 text-slate-950" />
+                    Retry Institutional Analysis
+                  </>
+                ) : (
+                  <>
+                    <Sparkles className="h-4 w-4 fill-slate-950" />
+                    Run Institutional Analysis
+                  </>
+                )}
+              </button>
+
+              {/* Historical Archive Toggle (Issue 2) */}
+              {historicalSignal && !signal && !isAnalyzing && (
+                <button
+                  type="button"
+                  onClick={() => setShowHistoricalArchive(prev => !prev)}
+                  className="w-full flex items-center justify-center gap-1.5 py-2 text-xs font-mono font-semibold text-slate-400 hover:text-slate-200 border border-slate-800 hover:border-slate-700 rounded-xl bg-slate-900/60 transition cursor-pointer"
+                >
+                  <History className="h-3.5 w-3.5 text-cyan-400" />
+                  {showHistoricalArchive
+                    ? 'Hide Historical Setup Archive'
+                    : `View Previous Verified Setup (${historicalSignal.asset} · ${formatSafeSessionDate(historicalSignal.created_at, 'date')})`}
+                </button>
               )}
-            </button>
+            </div>
           </div>
         </div>
 
@@ -941,8 +1136,22 @@ Reasoning: ${signal.reasoning.join(' | ')}`;
                 </div>
               </div>
 
+              {/* Genuine Progress Bar */}
+              <div className="mt-4">
+                <div className="flex justify-between items-center text-[11px] font-mono mb-1.5">
+                  <span className="text-slate-400">Institutional Validation Progress</span>
+                  <span className="text-emerald-400 font-bold">{activeProgressPercent || (analysisStep + 1) * 14}%</span>
+                </div>
+                <div className="w-full bg-slate-800 rounded-full h-1.5 overflow-hidden">
+                  <div
+                    className="bg-emerald-500 h-1.5 rounded-full transition-all duration-300"
+                    style={{ width: `${Math.max(activeProgressPercent || (analysisStep + 1) * 14, 8)}%` }}
+                  />
+                </div>
+              </div>
+
               {/* Step indicator */}
-              <div className="mt-5 space-y-2.5">
+              <div className="mt-4 space-y-2">
                 {ANALYSIS_STEPS.map((stepText, idx) => {
                   const isDone = idx < analysisStep;
                   const isCurrent = idx === analysisStep;
@@ -970,6 +1179,21 @@ Reasoning: ${signal.reasoning.join(' | ')}`;
                     </div>
                   );
                 })}
+              </div>
+
+              {/* Real-time status badge & Cancel Action */}
+              <div className="mt-4 pt-3 border-t border-slate-800 flex items-center justify-between gap-3">
+                <div className="flex items-center gap-2 text-xs text-slate-300 font-mono truncate max-w-[70%]">
+                  <span className="h-2 w-2 rounded-full bg-emerald-400 animate-ping shrink-0" />
+                  <span className="truncate">{activeJobMessage || ANALYSIS_STEPS[analysisStep]}</span>
+                </div>
+                <button
+                  onClick={handleCancelAnalysis}
+                  type="button"
+                  className="text-xs text-rose-400 hover:text-rose-300 border border-rose-500/30 hover:bg-rose-950/40 px-3 py-1 rounded transition font-mono shrink-0"
+                >
+                  Cancel Analysis
+                </button>
               </div>
             </div>
           )}
@@ -1014,9 +1238,9 @@ Reasoning: ${signal.reasoning.join(' | ')}`;
                         )}
                       </div>
                       <div className="flex flex-wrap items-center gap-1.5 text-[11px] text-slate-400 font-mono mt-0.5">
-                        <span>Session: {signal.session}</span>
+                        <span>Session: {signal.session || inferTradingSession(signal.created_at || signal.timestamp)}</span>
                         <span>·</span>
-                        <span className="whitespace-nowrap">{new Date(signal.created_at).toLocaleTimeString()}</span>
+                        <span className="whitespace-nowrap">{formatSafeSessionDate(signal.created_at || signal.timestamp, 'time')}</span>
                       </div>
                     </div>
                   </div>
@@ -1503,14 +1727,14 @@ Reasoning: ${signal.reasoning.join(' | ')}`;
               {/* DETAILED 7-LAYER ANALYSIS TABS */}
               {/* ------------------------------------------------------------- */}
               <div className="rounded-2xl border border-slate-800 bg-slate-900/90 p-5 shadow-lg">
-                {/* Tab Navigation Buttons */}
-                <div className="flex flex-wrap items-center gap-1.5 border-b border-slate-800 pb-3">
+                {/* Tab Navigation Buttons - Smooth Mobile Horizontal Scroll */}
+                <div className="flex items-center gap-1.5 border-b border-slate-800 pb-3 overflow-x-auto scrollbar-none max-w-full -mx-1 px-1">
                   {[
                     { id: 'institutional', label: 'Institutional A+ Setup (6 Sections)', icon: ShieldCheck, highlight: true },
-                    { id: 'aplus', label: signal?.strategy === 'CRT' ? 'CRT Blueprint' : 'A+ SMC Blueprint', icon: Sparkles },
+                    { id: 'aplus', label: signal?.strategy === 'ICT' ? 'ICT Blueprint' : signal?.strategy === 'CRT' ? 'CRT Blueprint' : signal?.strategy === 'Price Action' ? 'Price Action Blueprint' : 'A+ SMC Blueprint', icon: Sparkles },
                     { id: 'reasoning', label: 'Reasoning & Confluence', icon: CheckCircle2 },
                     { id: 'structure', label: 'Market Structure', icon: TrendingUp },
-                    { id: 'smc', label: signal?.strategy === 'CRT' ? 'CRT Range Breakdown' : 'SMC Breakdown', icon: Target },
+                    { id: 'smc', label: signal?.strategy === 'ICT' ? 'ICT Order Flow' : signal?.strategy === 'CRT' ? 'CRT Range Breakdown' : signal?.strategy === 'Price Action' ? 'Price Action Breakdown' : 'SMC Breakdown', icon: Target },
                     { id: 'volatility', label: 'Volatility & Session', icon: Gauge },
                     { id: 'risk', label: 'Risk Management', icon: Sliders },
                     { id: 'scores', label: 'Strategy Matrix', icon: Sliders },
@@ -1521,7 +1745,7 @@ Reasoning: ${signal.reasoning.join(' | ')}`;
                     <button
                       key={tab.id}
                       onClick={() => setActiveTab(tab.id as any)}
-                      className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition ${
+                      className={`shrink-0 whitespace-nowrap flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition ${
                         activeTab === tab.id
                           ? tab.highlight
                             ? 'bg-emerald-500 text-slate-950 font-bold shadow-md shadow-emerald-500/20'
@@ -2013,10 +2237,92 @@ Reasoning: ${signal.reasoning.join(' | ')}`;
                   </div>
                 )}
 
-                {/* Tab 3: SMC / CRT Breakdown */}
+                {/* Tab 3: Strategy Breakdown (SMC / ICT / CRT / Price Action) */}
                 {activeTab === 'smc' && (
                   <div className="mt-4 space-y-3">
-                    {signal.strategy === 'CRT' ? (
+                    {signal.strategy === 'ICT' ? (
+                      <>
+                        <div className="grid gap-3 sm:grid-cols-3">
+                          <div className="rounded-xl border border-slate-800 bg-slate-950/60 p-3">
+                            <span className="text-[11px] text-slate-400 font-medium">Draw on Liquidity (DOL)</span>
+                            <p className="mt-1 text-xs font-semibold text-cyan-300 font-mono">
+                              {signal.ictDetails?.drawOnLiquidity || signal.htfAnalysis?.drawOnLiquidity || 'Opposing Liquidity Pool'}
+                            </p>
+                          </div>
+
+                          <div className="rounded-xl border border-slate-800 bg-slate-950/60 p-3">
+                            <span className="text-[11px] text-slate-400 font-medium">Liquidity Run Pool</span>
+                            <p className="mt-1 text-xs font-semibold text-indigo-300 font-mono">
+                              {signal.ictDetails?.buySideLiquidityPool || signal.ictDetails?.sellSideLiquidityPool || signal.htfAnalysis?.majorLiquidity || 'Resting External BSL/SSL'}
+                            </p>
+                          </div>
+
+                          <div className="rounded-xl border border-slate-800 bg-slate-950/60 p-3">
+                            <span className="text-[11px] text-slate-400 font-medium">Optimal Trade Entry (OTE)</span>
+                            <p className="mt-1 text-xs font-semibold text-emerald-300 font-mono">
+                              {signal.ictDetails?.oteFibonacciZone || '62% - 79% Fibonacci Retracement'}
+                            </p>
+                          </div>
+                        </div>
+
+                        <div className="grid gap-3 sm:grid-cols-2">
+                          <div className="rounded-xl border border-slate-800 bg-slate-950/60 p-3.5">
+                            <span className="text-xs text-slate-400 font-medium">Fair Value Gap &amp; Displacement</span>
+                            <p className="mt-1 text-xs font-bold text-white font-mono">
+                              {signal.ictDetails?.fvgBoundaries || signal.ltfAnalysis?.fvg || 'Displacement FVG'} · {signal.ictDetails?.marketStructureShift || signal.ltfAnalysis?.mssChoch || 'Confirmed MSS'}
+                            </p>
+                          </div>
+
+                          <div className="rounded-xl border border-slate-800 bg-slate-950/60 p-3.5">
+                            <span className="text-xs text-slate-400 font-medium">Session Killzone Alignment</span>
+                            <p className="mt-1 text-xs font-bold text-amber-300 font-mono">
+                              {signal.ictDetails?.killzoneAlignment || signal.session || 'Active Institutional Session'}
+                            </p>
+                          </div>
+                        </div>
+                      </>
+                    ) : signal.strategy === 'Price Action' ? (
+                      <>
+                        <div className="grid gap-3 sm:grid-cols-3">
+                          <div className="rounded-xl border border-slate-800 bg-slate-950/60 p-3">
+                            <span className="text-[11px] text-slate-400 font-medium">Key Support / Resistance</span>
+                            <p className="mt-1 text-xs font-semibold text-cyan-300 font-mono">
+                              {signal.priceActionDetails?.keySupportResistanceLevel || signal.entry} ({signal.priceActionDetails?.levelType || 'Horizontal Level'})
+                            </p>
+                          </div>
+
+                          <div className="rounded-xl border border-slate-800 bg-slate-950/60 p-3">
+                            <span className="text-[11px] text-slate-400 font-medium">Candlestick Rejection Pattern</span>
+                            <p className="mt-1 text-xs font-semibold text-emerald-300 font-mono">
+                              {signal.priceActionDetails?.candlestickPattern || 'Rejection Pinbar / Engulfing'}
+                            </p>
+                          </div>
+
+                          <div className="rounded-xl border border-slate-800 bg-slate-950/60 p-3">
+                            <span className="text-[11px] text-slate-400 font-medium">Multi-Touch Validation</span>
+                            <p className="mt-1 text-xs font-semibold text-indigo-300 font-mono">
+                              {signal.priceActionDetails?.multiTouchConfluenceCount ? `${signal.priceActionDetails.multiTouchConfluenceCount} Historical Touches` : 'Multi-Touch Confluence'}
+                            </p>
+                          </div>
+                        </div>
+
+                        <div className="grid gap-3 sm:grid-cols-2">
+                          <div className="rounded-xl border border-slate-800 bg-slate-950/60 p-3.5">
+                            <span className="text-xs text-slate-400 font-medium">Breakout &amp; Retest Status</span>
+                            <p className="mt-1 text-xs font-bold text-white font-mono">
+                              {signal.priceActionDetails?.breakoutRetestConfirmed ? 'Confirmed Retest & Hold' : 'Clean S/R Bounce'} · {signal.priceActionDetails?.trendlineConfluence || 'Trendline Confluence'}
+                            </p>
+                          </div>
+
+                          <div className="rounded-xl border border-slate-800 bg-slate-950/60 p-3.5">
+                            <span className="text-xs text-slate-400 font-medium">Swing Target Level</span>
+                            <p className="mt-1 text-xs font-bold text-amber-300 font-mono">
+                              {signal.priceActionDetails?.swingTargetLevel || signal.takeProfit} (Next Structural Level)
+                            </p>
+                          </div>
+                        </div>
+                      </>
+                    ) : signal.strategy === 'CRT' ? (
                       <>
                         <div className="grid gap-3 sm:grid-cols-3">
                           <div className="rounded-xl border border-slate-800 bg-slate-950/60 p-3">
@@ -2405,15 +2711,106 @@ Reasoning: ${signal.reasoning.join(' | ')}`;
             );
           })()}
 
-          {/* Placeholder state when no signal is yet generated */}
-          {!signal && !isAnalyzing && (
+          {/* Historical Setup Archive Display (Issue 2) */}
+          {showHistoricalArchive && historicalSignal && !signal && !isAnalyzing && (
+            <div className="space-y-4">
+              <div className="rounded-xl border border-cyan-500/30 bg-cyan-950/20 p-4 flex items-center justify-between gap-3">
+                <div className="flex items-center gap-2.5">
+                  <History className="h-5 w-5 text-cyan-400 shrink-0" />
+                  <div>
+                    <span className="text-[10px] font-mono font-bold uppercase tracking-wider text-cyan-400 block">
+                      ARCHIVED SETUP ARCHIVE (NOT ACTIVE RUN)
+                    </span>
+                    <p className="text-xs text-slate-300">
+                      Viewing verified historical dossier for {historicalSignal.asset} ({formatSafeSessionDate(historicalSignal.created_at, 'full')}).
+                    </p>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setShowHistoricalArchive(false)}
+                  className="text-xs text-slate-400 hover:text-white px-2.5 py-1 rounded-lg bg-slate-800 border border-slate-700 transition"
+                >
+                  Close Archive
+                </button>
+              </div>
+
+              <div className="rounded-2xl border border-slate-800 bg-slate-900/80 p-5 shadow-xl">
+                <InstitutionalResultsPanel signal={historicalSignal} />
+              </div>
+            </div>
+          )}
+
+          {/* Failed State Display (Issue 1, 2, 5) */}
+          {!signal && !isAnalyzing && !showHistoricalArchive && errorMsg && (
+            <div className="rounded-2xl border border-rose-900/60 bg-gradient-to-b from-rose-950/30 to-slate-950 p-6 sm:p-8 text-center shadow-2xl">
+              <div className="flex h-14 w-14 items-center justify-center rounded-2xl bg-rose-950/80 text-rose-400 mx-auto mb-4 border border-rose-800/80 shadow-md">
+                <ShieldAlert className="h-7 w-7" />
+              </div>
+
+              <div className="inline-flex items-center gap-2 rounded-full bg-rose-500/10 border border-rose-500/30 px-3 py-1 text-xs font-mono font-bold text-rose-400 mb-2">
+                <span>SETUP STATUS: FAILED</span>
+                <span>·</span>
+                <span>STATE: {analysisState}</span>
+              </div>
+
+              <h3 className="text-lg sm:text-xl font-bold text-white font-mono mt-1">
+                Institutional Analysis Interrupted
+              </h3>
+              <p className="text-xs text-rose-300/90 max-w-lg mx-auto mt-2 leading-relaxed">
+                {errorMsg}
+              </p>
+
+              <div className="mt-4 p-3 rounded-xl bg-slate-950 border border-slate-800 text-[11px] font-mono text-slate-400 max-w-md mx-auto text-left space-y-1">
+                <div className="flex justify-between">
+                  <span>Engine Mandate:</span>
+                  <span className="text-emerald-400 font-semibold">Zero-Mock / Real Vision Only</span>
+                </div>
+                <div className="flex justify-between">
+                  <span>Inference Model:</span>
+                  <span className="text-slate-200">gemini-3.8-flash</span>
+                </div>
+                <div className="flex justify-between">
+                  <span>Analysis Job ID:</span>
+                  <span className="text-slate-300">{lastFailedJobId || 'N/A'}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span>Active Signal:</span>
+                  <span className="text-rose-400 font-bold">CLEARED (No Stale Confidence)</span>
+                </div>
+              </div>
+
+              <div className="mt-6 flex flex-wrap items-center justify-center gap-3">
+                <button
+                  onClick={lastFailedJobId ? handleRetryAnalysis : handleRunAnalysis}
+                  className="flex items-center gap-2 rounded-xl bg-emerald-500 hover:bg-emerald-400 px-5 py-2.5 text-xs font-black text-slate-950 shadow-lg shadow-emerald-500/20 transition cursor-pointer"
+                >
+                  <RefreshCw className="h-4 w-4" />
+                  Retry Institutional Analysis
+                </button>
+
+                {historicalSignal && (
+                  <button
+                    onClick={() => setShowHistoricalArchive(true)}
+                    className="flex items-center gap-1.5 rounded-xl border border-slate-700 bg-slate-900 px-4 py-2.5 text-xs font-bold text-slate-300 hover:text-white transition cursor-pointer"
+                  >
+                    <History className="h-3.5 w-3.5 text-cyan-400" />
+                    Inspect Last Verified Setup
+                  </button>
+                )}
+              </div>
+            </div>
+          )}
+
+          {/* Standby State when no signal is yet generated and no failure active */}
+          {!signal && !isAnalyzing && !showHistoricalArchive && !errorMsg && (
             <div className="rounded-2xl border border-dashed border-slate-800 bg-slate-900/40 p-12 text-center">
               <div className="flex h-14 w-14 items-center justify-center rounded-2xl bg-slate-800/80 text-emerald-400 mx-auto mb-4 border border-slate-700 shadow-md">
                 <Target className="h-7 w-7" />
               </div>
               <h3 className="text-lg font-bold text-white">Institutional Terminal Standby</h3>
               <p className="text-xs text-slate-400 max-w-md mx-auto mt-2 leading-relaxed">
-                Select your asset pair, analysis engine (SMC or CRT), and upload your 3 real chart timeframes (4H, 1H, 15M) or click one of the 1-click
+                Select your asset pair, analysis engine (SMC, ICT, CRT, Price Action), and upload your 3 real chart timeframes (4H, 1H, 15M) or click one of the 1-click
                 presets to generate institutional trade signals.
               </p>
               <div className="mt-6 flex justify-center">

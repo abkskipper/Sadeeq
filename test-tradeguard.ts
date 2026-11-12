@@ -25,6 +25,10 @@ import {
   validateTradeGuardAnalysis,
   parseNumericPrice,
   normalizeAplusSmcSequence,
+  calculateInstitutionalRiskManagement,
+  inferTradingSession,
+  formatSafeSessionDate,
+  classifyGeminiError,
 } from './src/lib/tradeGuardEngine';
 
 interface TestResult {
@@ -1134,6 +1138,232 @@ export function runRegressionTests() {
     'Visual Marker Separation',
     'Distinct visual markers maintained with separate price levels for Entry vs Liquidity Sweep'
   );
+
+  // -------------------------------------------------------------
+  // Suite 10: ICT Strategy Engine & Order Flow Confluence
+  // -------------------------------------------------------------
+  console.log('\n▶ Suite 10: ICT Strategy Engine & Order Flow Confluence');
+  const validIctSignal = {
+    pair: 'NAS100',
+    selectedStrategy: 'ICT',
+    strategy: 'ICT',
+    timeframe: '15M',
+    bias: 'BULLISH',
+    marketBias: 'BULLISH',
+    chartQuality: 'Readable',
+    setupStatus: 'CONFIRMED',
+    setupGrade: 'A+',
+    confidence: 88,
+    entry: 20450.0,
+    stopLoss: 20400.0,
+    takeProfit: 20580.0,
+    takeProfit1: 20580.0,
+    riskReward: '1 : 2.60',
+    hasConfirmedSetup: true,
+    reasoning: [
+      '4H Draw on Liquidity targets major buy-side liquidity resting at 20580',
+      'Sell-side liquidity purged below 20400 followed by energetic displacement',
+      '15M Fair Value Gap respected with confirmed Market Structure Shift (MSS)',
+    ],
+    evidence: [
+      '4H DOL identified at 20580 swing high',
+      '15M MSS candle closed decisively above 20440',
+      'Unfilled bullish FVG formed between 20445 and 20455',
+    ],
+    htfAnalysis: {
+      timeframe: '4H',
+      bias: 'BULLISH',
+      marketStructure: 'Bullish order flow expansion',
+      majorLiquidity: 'Major buy-side liquidity pool at 20580',
+      drawOnLiquidity: '20580 BSL Pool',
+      htfPoi: '4H Demand Imbalance',
+      premiumDiscount: 'Discount Zone',
+      supplyDemandZone: '20380-20420 Demand',
+      evidence: '4H bullish displacement continuation',
+    },
+    mtfAnalysis: {
+      timeframe: '1H',
+      marketStructureRefinement: '1H BOS confirmed',
+      poiRefinement: '1H Fair Value Gap',
+      mitigationStatus: 'Tested',
+      inducement: 'Internal low at 20420',
+      evidence: '1H candle body closed above internal liquidity',
+    },
+    ltfAnalysis: {
+      timeframe: '15M',
+      executionConfirmation: 'Confirmed 15M FVG tap with MSS',
+      liquiditySweep: 'Swept 20400 sell-side stops',
+      displacement: 'Energetic bullish impulse candle',
+      mssChoch: 'Bullish MSS confirmed with full body close',
+      fvg: '20445 - 20455 Bullish FVG',
+      entryTrigger: '15M FVG tap during NY session killzone',
+      evidence: 'Displacement candle body closed above 20440',
+    },
+    ictDetails: {
+      drawOnLiquidity: 'Major BSL at 20580',
+      drawOnLiquidityTarget: 20580.0,
+      buySideLiquidityPool: 20580.0,
+      sellSideLiquidityPool: 20400.0,
+      liquidityRunConfirmed: true,
+      marketStructureShift: 'Bullish MSS above 20440',
+      displacementConfirmed: true,
+      fvgPresent: true,
+      fvgBoundaries: '20445 - 20455',
+      oteFibonacciZone: '62% - 79% OTE equilibrium',
+      killzoneAlignment: 'NY AM Killzone',
+      invalidationAnchor: 'Anchored below displacement origin (20400.0)',
+    },
+  };
+
+  const ictValidation = validateTradeGuardAnalysis(validIctSignal, {
+    asset: 'NAS100',
+    strategy: 'ICT',
+    charts: validCharts3,
+  });
+  assert(ictValidation.valid === true, 'ICT Engine', 'Valid Bullish ICT setup on NAS100 passes validation');
+  assert(validIctSignal.setupGrade === 'A+', 'ICT Engine', 'ICT setup with 2.60 R:R and verified confluence receives A+ grade');
+  assert(Boolean(validIctSignal.ictDetails && validIctSignal.ictDetails.fvgPresent), 'ICT Engine', 'ICT setup retains verified FVG and displacement details');
+
+  // -------------------------------------------------------------
+  // Suite 11: Price Action Strategy Engine & S/R Confluence
+  // -------------------------------------------------------------
+  console.log('\n▶ Suite 11: Price Action Strategy Engine & S/R Confluence');
+  const validPriceActionSignal = {
+    pair: 'USDJPY',
+    selectedStrategy: 'Price Action',
+    strategy: 'Price Action',
+    timeframe: '15M',
+    bias: 'BULLISH',
+    marketBias: 'BULLISH',
+    chartQuality: 'Readable',
+    setupStatus: 'CONFIRMED',
+    setupGrade: 'A+',
+    confidence: 86,
+    entry: 153.25,
+    stopLoss: 152.85,
+    takeProfit: 154.25,
+    takeProfit1: 154.25,
+    riskReward: '1 : 2.50',
+    hasConfirmedSetup: true,
+    reasoning: [
+      'Key horizontal resistance at 153.20 flipped to strong support (Polarity Flip)',
+      'Multiple historical rejection touches confirming key structural significance',
+      '15M Bullish Pinbar rejection candle printed with long lower wick rejecting support',
+    ],
+    evidence: [
+      '3 historical touches validating 153.20 horizontal support',
+      '15M pinbar rejection printed with closing price at 153.25',
+      'Targeting next major swing high resistance at 154.25',
+    ],
+    htfAnalysis: {
+      timeframe: '4H',
+      bias: 'BULLISH',
+      marketStructure: 'Consecutive higher highs and higher lows',
+      majorLiquidity: 'Major resistance at 154.25',
+      drawOnLiquidity: '154.25 Horizontal Resistance',
+      htfPoi: '153.20 Horizontal Polarity Flip',
+      premiumDiscount: 'Discount boundary',
+      supplyDemandZone: '153.00-153.25 Support Zone',
+      evidence: '4H breakout above 153.20 confirmed',
+    },
+    mtfAnalysis: {
+      timeframe: '1H',
+      marketStructureRefinement: '1H retest of broken resistance holding as support',
+      poiRefinement: '153.20 Key S/R Level',
+      mitigationStatus: 'Tested and rejected',
+      inducement: 'False breakout sellers trapped at 152.95',
+      evidence: '1H wick rejection confirming defense of level',
+    },
+    ltfAnalysis: {
+      timeframe: '15M',
+      executionConfirmation: 'Confirmed 15M Bullish Pinbar rejection',
+      liquiditySweep: 'Wick rejection down to 152.85',
+      displacement: 'Bullish departure candle from S/R level',
+      mssChoch: 'Confirmed higher low bounce',
+      entryTrigger: 'Close of 15M rejection pinbar at 153.25',
+      evidence: '15M candle closed with long lower shadow rejecting support',
+    },
+    priceActionDetails: {
+      keySupportResistanceLevel: 153.20,
+      levelType: 'POLARITY_FLIP',
+      multiTouchConfluenceCount: 3,
+      candlestickPattern: 'Bullish Pinbar Rejection',
+      breakoutRetestConfirmed: true,
+      trendlineConfluence: 'Ascending trendline confluence',
+      swingTargetLevel: 154.25,
+      structuralExhaustionEvidence: 'Exhaustion wicks rejecting 153.20 support',
+      invalidationAnchor: 'Anchored below rejection pinbar wick (152.85)',
+    },
+  };
+
+  const paValidation = validateTradeGuardAnalysis(validPriceActionSignal, {
+    asset: 'USDJPY',
+    strategy: 'Price Action',
+    charts: validCharts3,
+  });
+  assert(paValidation.valid === true, 'Price Action Engine', 'Valid Bullish Price Action setup on USDJPY passes validation');
+  assert(validPriceActionSignal.setupGrade === 'A+', 'Price Action Engine', 'Price Action setup with 2.50 R:R receives A+ grade');
+  assert(Boolean(validPriceActionSignal.priceActionDetails?.breakoutRetestConfirmed), 'Price Action Engine', 'Price Action retains breakout-retest confirmation details');
+
+  // -------------------------------------------------------------
+  // Suite 12: Institutional Position Sizing & Risk Management
+  // -------------------------------------------------------------
+  console.log('\n▶ Suite 12: Institutional Position Sizing & Risk Management');
+  // Forex EURUSD test
+  const forexRisk = calculateInstitutionalRiskManagement('EURUSD', 10000, 1.0, 1.0850, 1.0830, 1.0900);
+  assert(forexRisk.riskPercent === 1.0, 'Risk Management', 'Risk percent is correctly preserved as 1.0%');
+  assert(forexRisk.maximumLoss === '$100.00 (1.0% Risk)', 'Risk Management', 'Forex maximum loss correctly equals $100.00');
+  assert(forexRisk.lotSize === '0.50 Lots', 'Risk Management', 'EURUSD 20 pip stop accurately sizes to 0.50 Lots (50,000 units)');
+  assert(!forexRisk.positionSize.includes('10000'), 'Risk Management', 'Never uses account balance as position size');
+
+  // Gold XAUUSD test
+  const goldRisk = calculateInstitutionalRiskManagement('XAUUSD', 10000, 1.0, 2745.0, 2740.0, 2760.0);
+  assert(goldRisk.lotSize === '0.20 Lots', 'Risk Management', 'Gold $5.00 stop distance accurately sizes to 0.20 Lots (20.0 oz)');
+  assert(goldRisk.positionSize.includes('20.0 oz'), 'Risk Management', 'Gold specifies physical troy ounces and notional value');
+
+  // Crypto BTCUSDT test
+  const cryptoRisk = calculateInstitutionalRiskManagement('BTCUSDT', 10000, 1.0, 95000.0, 94000.0, 98000.0);
+  assert(String(cryptoRisk.lotSize).includes('BTC'), 'Risk Management', 'Crypto sizing specifies exact coin units (e.g. 0.100 BTC)');
+  assert(!cryptoRisk.positionSize.includes('10000.00'), 'Risk Management', 'Crypto sizing uses stop distance formula rather than account balance');
+
+  // Indices NAS100 test
+  const indexRisk = calculateInstitutionalRiskManagement('NAS100', 10000, 1.0, 20450.0, 20400.0, 20580.0);
+  assert(indexRisk.lotSize === '2.00 Contracts', 'Risk Management', 'Indices 50 pt stop distance accurately sizes to 2.00 Contracts');
+
+  console.log('\n▶ Suite 13: Trading Session, Date Formatting & Gemini Error Classification');
+  // 1. Session determination test
+  const sessionLondon = inferTradingSession('2026-11-05T09:00:00Z');
+  assert(sessionLondon.includes('London'), 'Session Determination', '09:00 UTC correctly maps to London Session');
+  const sessionOverlap = inferTradingSession('2026-11-05T14:30:00Z');
+  assert(sessionOverlap.includes('Overlap'), 'Session Determination', '14:30 UTC correctly maps to London / New York Overlap');
+  const sessionDefault = inferTradingSession();
+  assert(typeof sessionDefault === 'string' && sessionDefault.length > 5, 'Session Determination', 'Default session determination returns valid session string');
+
+  // 2. Safe Date formatting test (Issue 3)
+  const safeInvalid1 = formatSafeSessionDate(null);
+  assert(safeInvalid1 === 'Date unavailable', 'Date Validation', 'null input safely yields "Date unavailable"');
+  const safeInvalid2 = formatSafeSessionDate(undefined);
+  assert(safeInvalid2 === 'Date unavailable', 'Date Validation', 'undefined input safely yields "Date unavailable"');
+  const safeInvalid3 = formatSafeSessionDate('not-a-valid-date');
+  assert(safeInvalid3 === 'Date unavailable', 'Date Validation', 'Malformed date string safely yields "Date unavailable" instead of "Invalid Date"');
+  const safeValid = formatSafeSessionDate('2026-11-05T14:30:00Z', 'time');
+  assert(!safeValid.includes('Invalid') && safeValid.length > 0, 'Date Validation', 'Valid ISO timestamp safely formats to time string without "Invalid Date"');
+
+  // 3. Gemini Error Classification & Demand Surge test (Issue 1)
+  const surgeError = classifyGeminiError(new Error('This model is currently experiencing high demand. Spikes in demand.'));
+  assert(surgeError.code === 'PROVIDER_UNAVAILABLE' || surgeError.code === 'RATE_LIMITED', 'Error Classifier', 'Demand surge maps to PROVIDER_UNAVAILABLE or RATE_LIMITED');
+  assert(surgeError.retryable === true, 'Error Classifier', 'Demand surge is marked as retryable for backoff');
+
+  const rateLimitError = classifyGeminiError({ status: 429, message: 'Resource has been exhausted (e.g. check quota). retry after 5 seconds' });
+  assert(rateLimitError.status === 429, 'Error Classifier', 'HTTP 429 status code accurately identified');
+  assert(rateLimitError.retryable === true, 'Error Classifier', 'Transient rate limit spike is retryable');
+  assert(rateLimitError.retryAfterSeconds === 5, 'Error Classifier', 'Retry-After 5 seconds accurately parsed from provider error');
+
+  const authError = classifyGeminiError({ status: 401, message: 'API_KEY_INVALID: API key not valid' });
+  assert(authError.retryable === false, 'Error Classifier', 'Permanent API key authentication error is NOT marked as retryable');
+
+  const timeoutError = classifyGeminiError({ status: 504, message: 'Gemini request timed out after 28000ms' });
+  assert(timeoutError.code === 'ANALYSIS_FAILED' && timeoutError.retryable === true, 'Error Classifier', 'Timeout 504 maps to retryable analysis failure');
 
   // Summary
   const passedCount = results.filter(r => r.passed).length;

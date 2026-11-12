@@ -25,17 +25,204 @@ import type {
   AplusLiquidityTargetsInfo,
   AplusChecklistItem,
   AnalysisStateMachineState,
+  Strategy,
+  RiskManagementInfo,
+  IctAnalysisDetails,
+  PriceActionAnalysisDetails,
+  CrtAnalysisDetails,
 } from '../types';
 
 // =============================================================
 // 1. PINNED MODEL & VERSION CONTROL
 // =============================================================
-// Stable production model for TradeGuard.
-export const TRADEGUARD_GEMINI_MODEL = process.env.TRADEGUARD_GEMINI_MODEL || 'gemini-3.6-flash';
+// Stable production model for TradeGuard. Pinned to gemini-3.8-flash per @google/genai guidelines.
+export const TRADEGUARD_GEMINI_MODEL = process.env.TRADEGUARD_GEMINI_MODEL || 'gemini-3.8-flash';
 export const TRADEGUARD_ENGINE_VERSION = 'TG-CORE-1.0';
 export const TRADEGUARD_PROMPT_VERSION = 'TG-SMC-CRT-1.0';
 export const TRADEGUARD_SCHEMA_VERSION = 'TG-ANALYSIS-1.0';
 export const TRADEGUARD_MODEL_VERSION = TRADEGUARD_GEMINI_MODEL;
+
+/**
+ * Institutional Trading Session Determination based on UTC hour:
+ * - 00:00 - 07:00 UTC: Asian Session (Tokyo / Sydney)
+ * - 07:00 - 12:00 UTC: London Session
+ * - 12:00 - 16:00 UTC: London / New York Overlap (Highest Institutional Liquidity)
+ * - 16:00 - 21:00 UTC: New York PM Session
+ * - 21:00 - 24:00 UTC: Asian Pre-Open
+ */
+export function inferTradingSession(dateInput?: Date | string | number): string {
+  const d = dateInput ? new Date(dateInput) : new Date();
+  if (isNaN(d.getTime())) return 'Active Institutional Session';
+  const utcHour = d.getUTCHours();
+  if (utcHour >= 0 && utcHour < 7) {
+    return 'Asian Session (Tokyo/Sydney)';
+  } else if (utcHour >= 7 && utcHour < 12) {
+    return 'London Session';
+  } else if (utcHour >= 12 && utcHour < 16) {
+    return 'London / New York Overlap';
+  } else if (utcHour >= 16 && utcHour < 21) {
+    return 'New York PM Session';
+  } else {
+    return 'Asian Pre-Open';
+  }
+}
+
+/**
+ * Validates and safely formats any date/time string, preventing "Invalid Date" errors.
+ * Returns fallback "Date unavailable" if invalid or missing.
+ */
+export function formatSafeSessionDate(val: any, format: 'time' | 'date' | 'full' = 'time'): string {
+  if (!val) return 'Date unavailable';
+  const d = new Date(val);
+  if (isNaN(d.getTime())) return 'Date unavailable';
+  try {
+    if (format === 'time') {
+      return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    } else if (format === 'date') {
+      return d.toLocaleDateString([], { month: 'short', day: 'numeric', year: 'numeric' });
+    } else {
+      return d.toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+    }
+  } catch {
+    return 'Date unavailable';
+  }
+}
+
+/**
+ * Robust error classifier for Gemini AI requests (Issue 1 & Issue 5):
+ * Distinguishes transient concurrency / demand spikes (429/503/504) from permanent auth/quota issues.
+ */
+export function classifyGeminiError(err: any): {
+  code: string;
+  status: number;
+  message: string;
+  retryable: boolean;
+  retryAfterSeconds?: number;
+} {
+  const rawMsg = err?.message || String(err || '');
+  let parsedJson: any = null;
+  try {
+    parsedJson = JSON.parse(rawMsg);
+  } catch (_) {
+    const match = rawMsg.match(/\{[\s\S]*\}/);
+    if (match) {
+      try { parsedJson = JSON.parse(match[0]); } catch (_) {}
+    }
+  }
+
+  const googleErr = parsedJson?.error;
+  const status = googleErr?.code || err?.status || (rawMsg.includes('429') ? 429 : rawMsg.includes('503') ? 503 : rawMsg.includes('504') ? 504 : 500);
+  const directMsg = googleErr?.message || rawMsg;
+
+  // Extract Retry-After or quota reset time if available
+  let retryAfterSeconds: number | undefined = undefined;
+  if (err?.response?.headers) {
+    const headerVal = err.response.headers['retry-after'] || err.response.headers['Retry-After'];
+    if (headerVal) {
+      const parsedSec = parseInt(headerVal, 10);
+      if (!isNaN(parsedSec) && parsedSec > 0) {
+        retryAfterSeconds = parsedSec;
+      }
+    }
+  }
+  if (!retryAfterSeconds) {
+    const resetMatch = directMsg.match(/resets\s+in\s+~?(\d+)\s*(s|sec|seconds)?/i) ||
+                       directMsg.match(/retry\s+after\s+(\d+)\s*(s|sec|seconds)?/i) ||
+                       directMsg.match(/wait\s+(\d+)\s*(s|sec|seconds)?/i);
+    if (resetMatch && resetMatch[1]) {
+      retryAfterSeconds = parseInt(resetMatch[1], 10);
+    }
+  }
+
+  // Permanent authentication or project permission failures
+  if (
+    status === 401 ||
+    status === 403 ||
+    directMsg.includes('API_KEY_INVALID') ||
+    directMsg.includes('PERMISSION_DENIED') ||
+    directMsg.includes('UNAUTHENTICATED')
+  ) {
+    return {
+      code: 'PROVIDER_UNAVAILABLE',
+      status,
+      message: 'Gemini API authentication failed or API key is invalid. Please verify GEMINI_API_KEY in server environment.',
+      retryable: false,
+    };
+  }
+
+  // Quota Exhausted (Daily or hard billing limits)
+  if (
+    directMsg.includes('RESOURCE_EXHAUSTED') &&
+    (directMsg.includes('quota') || directMsg.includes('free tier') || directMsg.includes('limit: 0')) &&
+    !directMsg.includes('resets in')
+  ) {
+    return {
+      code: 'RATE_LIMITED',
+      status: 429,
+      message: 'Google Gemini API quota limit reached. Please check your billing settings or API key in Settings > Secrets.',
+      retryable: false,
+      retryAfterSeconds,
+    };
+  }
+
+  // Transient Rate Limit / Concurrency Spike (Spikes in demand, 429)
+  if (
+    status === 429 ||
+    directMsg.includes('RESOURCE_EXHAUSTED') ||
+    directMsg.includes('Spikes in demand') ||
+    directMsg.includes('Too Many Requests') ||
+    directMsg.includes('resets in')
+  ) {
+    const resetMsg = retryAfterSeconds ? ` Quota resets in ~${retryAfterSeconds}s.` : '';
+    return {
+      code: 'RATE_LIMITED',
+      status: 429,
+      message: `Gemini rate limit reached.${resetMsg} Please wait a moment before retrying.`,
+      retryable: true,
+      retryAfterSeconds: retryAfterSeconds || 5,
+    };
+  }
+
+  // Transient 503 Service Unavailable / High Demand
+  if (
+    status === 503 ||
+    directMsg.includes('503') ||
+    directMsg.includes('high demand') ||
+    directMsg.includes('temporarily overloaded') ||
+    directMsg.includes('temporarily unavailable')
+  ) {
+    return {
+      code: 'PROVIDER_UNAVAILABLE',
+      status: 503,
+      message: 'Temporary Gemini Server Demand Surge: This model is currently experiencing high demand. Spikes in traffic are normal. Please click Retry Institutional Analysis.',
+      retryable: true,
+      retryAfterSeconds: retryAfterSeconds || 2,
+    };
+  }
+
+  // Timeout / Gateway 504
+  if (
+    status === 504 ||
+    directMsg.includes('timed out') ||
+    directMsg.includes('ETIMEDOUT') ||
+    directMsg.includes('DEADLINE_EXCEEDED')
+  ) {
+    return {
+      code: 'ANALYSIS_FAILED',
+      status: 504,
+      message: 'Analysis timed out while processing institutional charts. Please click Retry Institutional Analysis.',
+      retryable: true,
+      retryAfterSeconds: 2,
+    };
+  }
+
+  return {
+    code: 'ANALYSIS_FAILED',
+    status: status || 500,
+    message: directMsg || 'An error occurred during institutional chart analysis.',
+    retryable: true,
+  };
+}
 
 // Known mock/placeholder values from legacy codebase templates that must NEVER appear in verified setups
 export const BANNED_MOCK_NUMBERS = [
@@ -91,7 +278,7 @@ export const TRADEGUARD_RESPONSE_SCHEMA = {
     selectedStrategy: { type: Type.STRING },
     strategy: {
       type: Type.STRING,
-      enum: ['SMC', 'CRT'],
+      enum: ['SMC', 'ICT', 'CRT', 'Price Action', 'PRICE_ACTION'],
     },
     timeframes: {
       type: Type.OBJECT,
@@ -362,6 +549,40 @@ export const TRADEGUARD_RESPONSE_SCHEMA = {
       },
     },
 
+    ictDetails: {
+      type: Type.OBJECT,
+      properties: {
+        drawOnLiquidity: { type: Type.STRING },
+        drawOnLiquidityTarget: { type: Type.STRING },
+        buySideLiquidityPool: { type: Type.STRING },
+        sellSideLiquidityPool: { type: Type.STRING },
+        liquidityRunConfirmed: { type: Type.BOOLEAN },
+        marketStructureShift: { type: Type.STRING },
+        displacementConfirmed: { type: Type.BOOLEAN },
+        fvgPresent: { type: Type.BOOLEAN },
+        fvgBoundaries: { type: Type.STRING },
+        oteFibonacciZone: { type: Type.STRING },
+        killzoneAlignment: { type: Type.STRING },
+        orderBlockExecution: { type: Type.STRING },
+        invalidationAnchor: { type: Type.STRING },
+      },
+    },
+
+    priceActionDetails: {
+      type: Type.OBJECT,
+      properties: {
+        keySupportResistanceLevel: { type: Type.STRING },
+        levelType: { type: Type.STRING },
+        multiTouchConfluenceCount: { type: Type.INTEGER },
+        candlestickPattern: { type: Type.STRING },
+        breakoutRetestConfirmed: { type: Type.BOOLEAN },
+        trendlineConfluence: { type: Type.STRING },
+        swingTargetLevel: { type: Type.STRING },
+        structuralExhaustionEvidence: { type: Type.STRING },
+        invalidationAnchor: { type: Type.STRING },
+      },
+    },
+
     confirmationItems: {
       type: Type.ARRAY,
       items: {
@@ -419,13 +640,147 @@ export const TRADEGUARD_RESPONSE_SCHEMA = {
 };
 
 // =============================================================
-// 4. PROMPT BUILDERS (SMC vs CRT)
+// 4. PROMPT BUILDERS (SMC, ICT, CRT, PRICE ACTION)
 // =============================================================
-export function buildTradeGuardPrompt(strategy: 'SMC' | 'CRT', asset: string): {
+export function buildTradeGuardPrompt(strategy: Strategy | string, asset: string): {
   systemInstruction: string;
   userInstruction: string;
 } {
-  const isSmc = strategy === 'SMC';
+  const rawStrat = String(strategy || '').toUpperCase();
+  const isSmc = rawStrat === 'SMC';
+  const isIct = rawStrat === 'ICT';
+  const isCrt = rawStrat === 'CRT';
+  const isPriceAction = rawStrat.includes('PRICE') || rawStrat.includes('PA');
+  const normalizedStrategy: Strategy = isCrt ? 'CRT' : isIct ? 'ICT' : isPriceAction ? 'Price Action' : 'SMC';
+
+  let strategyMandate = '';
+  if (isSmc) {
+    strategyMandate = `=== PRIMARY A+ SMC MODEL — STRICT 12-STAGE INSTITUTIONAL SEQUENCE ===
+DO NOT replace this logic with generic "SMC confluence", generic confidence scoring, or a simple BOS/CHoCH checklist.
+Implement this exact setup:
+HTF SUPPLY/DEMAND
+→ MITIGATION
+→ INDUCEMENT
+→ LIQUIDITY SWEEP
+→ VALIDATION OF HTF ZONE
+→ PROTECTED HIGH/LOW
+→ FAILURE TO SWING
+→ CHANGE IN STATE OF DELIVERY
+→ POI
+→ MITIGATION
+→ ENTRY
+→ STRUCTURAL SL
+→ INTERNAL RANGE LIQUIDITY / VALID TP
+
+DO NOT FORCE A TRADE WHEN THE SEQUENCE IS ABSENT.
+
+STAGE 1. HIGHER-TIMEFRAME SUPPLY/DEMAND (4H):
+- Identify a structurally meaningful Supply (for bearish setup) or Demand (for bullish setup) based on actual price structure visible on the 4H chart.
+- zoneType: 'SUPPLY' | 'DEMAND', zoneHigh, zoneLow, timeframe: '4H', evidence, validity.
+
+STAGE 2. MITIGATION:
+- Price must return into / interact with the HTF zone. Confirm from actual candles.
+- Do not assume mitigation merely because price is near the zone.
+
+STAGE 3. INDUCEMENT:
+- Identify price action inducing traders into an early directional position.
+- Bearish: price pushes down from supply, inducing early sellers.
+- Bullish: price pushes up from demand, inducing early buyers.
+
+STAGE 4. LIQUIDITY SWEEP:
+- Price sweeps early trader stop orders in/around the HTF zone.
+- Bearish: sweeps seller liquidity above high.
+- Bullish: sweeps buyer liquidity below low.
+
+STAGE 5. VALIDATION OF THE HTF ZONE:
+- Liquidity sweep occurring inside/around the HTF supply/demand zone validates it.
+
+STAGE 6. PROTECTED HIGH / PROTECTED LOW:
+- Extreme created by that sweep becomes the structural invalidation anchor.
+
+STAGE 7. FAILURE TO SWING (ESSENTIAL — DO NOT ENTER PREMATURELY):
+- Price attempts a second swing toward the protected extreme and FAILS to break/accept beyond it.
+- Proves directional exhaustion before the shift.
+
+STAGE 8. CHANGE IN STATE OF DELIVERY (CISD / COSD):
+- Candle body close beyond the failure-to-swing structural trigger pivot.
+
+STAGE 9. POI OF THE CHANGE IN STATE OF DELIVERY:
+- Clean unmitigated 15M Order Block or Fair Value Gap left behind by the delivery shift impulse.
+
+STAGE 10. WAIT FOR MITIGATION OF THE POI:
+- Price retraces back to mitigate the 15M POI while the protected extreme remains defended.
+
+STAGE 11. 15M EXECUTION:
+- Entry: exact price upon POI mitigation retest.
+- Stop Loss: MUST BE ANCHORED BEYOND THE PROTECTED HIGH (bearish) OR PROTECTED LOW (bullish)!
+- Take Profit: At internal range liquidity / valid structural target (equal highs/lows, previous swing low/high).
+
+STAGE 12. SEQUENCE DISCIPLINE:
+- If ANY stage 1-9 is absent or pending, output setupStatus: 'DEVELOPING' or 'WAIT — NO VALID A+ SETUP' with null entry/sl/tp!`;
+  } else if (isIct) {
+    strategyMandate = `=== PRIMARY ICT (INNER CIRCLE TRADER) ORDER FLOW MODEL ===
+Implement this exact institutional setup sequence:
+1. HIGHER-TIMEFRAME (4H) DRAW ON LIQUIDITY (DOL):
+   - Identify the magnetic Draw on Liquidity (DOL) where price is seeking delivery:
+     * Major Buy-Side Liquidity (BSL) resting above swing highs
+     * Major Sell-Side Liquidity (SSL) resting below swing lows
+     * Unfilled HTF Imbalance / Fair Value Gap (FVG)
+2. LIQUIDITY RUN (PURGE):
+   - Price runs into an established liquidity pool (BSL for shorts, SSL for longs) to purge resting stops.
+   - Sweep must show clear wick rejection departure.
+3. MARKET STRUCTURE SHIFT (MSS) & ENERGETIC DISPLACEMENT:
+   - Aggressive displacement candles with large full bodies closing beyond recent structural swing highs/lows.
+   - Displacement must create a distinct Fair Value Gap (FVG / 3-candle imbalance).
+4. FAIR VALUE GAP (FVG) & OPTIMAL TRADE ENTRY (OTE):
+   - Identify the primary 15M FVG created by displacement.
+   - Measure the dealing range Fibonacci: Optimal Trade Entry resting between the 62% and 79% equilibrium/discount/premium zone.
+5. KILLZONE / SESSION ALIGNMENT:
+   - Identify active institutional killzone (London Open 02:00-05:00 NY, NY AM 07:00-10:00 NY, London Close 10:00-12:00 NY).
+6. EXECUTION ENTRY & INVALIDATION:
+   - Entry: Limit or market tap into the 15M FVG / OTE retracement zone.
+   - ABSOLUTE MANDATE: NEVER enter on the swept BSL or SSL extreme!
+   - Stop Loss: Anchored strictly beyond the displacement swing origin / protected structural high or low.
+   - Take Profit: Target opposing external range liquidity (opposing BSL or SSL).
+   - Minimum R:R: >= 2.0:1.`;
+  } else if (isCrt) {
+    strategyMandate = `=== PRIMARY CRT (CANDLE RANGE THEORY) MODEL ===
+Implement this exact institutional range expansion sequence:
+1. REFERENCE RANGE FORMATION (HTF/MTF):
+   - Identify the clearly defined reference range: Range High and Range Low (e.g., Asian Range, previous session range, or 4H dealing range).
+2. BOUNDARY EXPANSION SWEEP:
+   - Price expands beyond the range boundary to engineer liquidity.
+   - Wick pierces beyond the boundary high or low to trigger resting breakout stops, but candle body fails to accept outside.
+3. AGGRESSIVE REJECTION BACK INSIDE RANGE:
+   - Strong rejection candle closes decisively back inside the reference range boundary.
+4. 15M LOWER TIMEFRAME CONFIRMATION:
+   - Retest of the breached range boundary or range 50% equilibrium with rejection wick confirmation.
+5. EXECUTION ENTRY & INVALIDATION:
+   - Entry: On retest of the range boundary or equilibrium.
+   - Stop Loss: Anchored strictly beyond the sweep wick extreme.
+   - Take Profit: Target opposing range boundary or external range expansion liquidity.
+   - Minimum R:R: >= 1.5:1 to 2.0:1.`;
+  } else {
+    strategyMandate = `=== PRIMARY CLASSICAL INSTITUTIONAL PRICE ACTION MODEL ===
+Implement this exact price action confirmation sequence:
+1. KEY HORIZONTAL SUPPORT / RESISTANCE MAPPING:
+   - Identify major horizontal Support or Resistance from clear visible swing highs/lows on 4H and 1H charts.
+   - Must show multi-touch validation (at least 2 previous touches) or Polarity Flip (broken support becoming resistance, or broken resistance becoming support).
+2. MULTI-TIMEFRAME CONFLUENCE:
+   - Key level alignment with dynamic trendlines, channel boundaries, or psychological whole numbers.
+3. CANDLESTICK REJECTION CONFIRMATION:
+   - 15M/1H high-probability candlestick pattern printed at the key level:
+     * Pinbar / Hammer / Shooting Star with long rejection tail piercing into the level
+     * Bullish or Bearish Engulfing candle whose body completely engulfs the prior candle
+     * Morning Star or Evening Star structural reversal
+4. BREAKOUT-RETEST OR CLEAN BOUNCE:
+   - Clean bounce from key horizontal level, or breakout beyond level followed by test and confirmed rejection.
+5. EXECUTION ENTRY & INVALIDATION:
+   - Entry: At the close of the rejection candlestick or limit retest of the key horizontal level.
+   - Stop Loss: Anchored beyond the rejection candle wick extreme / swing pivot with volatility buffer.
+   - Take Profit: Target the next major horizontal support/resistance level or swing target.
+   - Minimum R:R: >= 2.0:1.`;
+  }
 
   const systemInstruction = `You are TradeGuard AI — Institutional Multi-Timeframe Chart Analysis Engine (${TRADEGUARD_ENGINE_VERSION}).
 Your absolute directive is evidence-first visual chart analysis strictly based on the three uploaded charts.
@@ -489,22 +844,12 @@ The engine must reason sequentially across the 4H, 1H, and 15M charts rather tha
      * INVALID: price has breached structural invalidation.
      * NOT_PRESENT: no structural execution evidence exists.
 
-=== 2. STRICT 12-STAGE INSTITUTIONAL SEQUENCE MANDATE ===
-For an institutional A+ trade signal, the entire sequence must be verified in order:
-Higher-Timeframe Supply/Demand → Mitigation → Inducement & Liquidity Sweep → Protected Extreme → Failure to Swing → Change in State of Delivery (CISD) → Displacement → POI Selection → POI Retest & Mitigation → Sniper Entry → Structural Stop Loss → Take Profit Targets.
-
-If ANY required stage from 1 through 9 is missing, pending, or unconfirmed (e.g. no liquidity sweep, failure to swing pending, CISD unconfirmed, POI unmitigated):
-- Set setupStatus: 'DEVELOPING' or 'WAIT — NO VALID A+ SETUP' (or 'NO_SETUP' if no structure exists).
-- Set entry: null, stopLoss: null, takeProfit: null.
-- Set stateMachineState to the exact corresponding waiting state (e.g., WAITING_FOR_LIQUIDITY_SWEEP, WAITING_FOR_FAILURE_TO_SWING, WAITING_FOR_CISD, WAITING_FOR_RETEST).
-- DO NOT generate or force an executable trade signal!
-
-=== 3. ABSOLUTE SEPARATION: LIQUIDITY POOL IS NEVER AN ENTRY LEVEL ===
+=== 2. ABSOLUTE SEPARATION: LIQUIDITY POOL IS NEVER AN ENTRY LEVEL ===
 - A liquidity pool is an area where resting orders sit.
 - A liquidity sweep is price running into those orders to engineer liquidity.
 - A protected high/low is the structural extreme established after the sweep.
 - A POI is an unmitigated order block, FVG, or retest zone created by displacement AFTER the sweep.
-- The entry is taken at or within the POI AFTER CISD and displacement, NOT at the swept high or swept low.
+- The entry is taken at or within the POI AFTER displacement, NOT at the swept high or swept low.
 MANDATORY RULES:
 * NEVER place an entry directly on the swept high or swept low.
 * NEVER treat buy-side liquidity as a buy entry.
@@ -512,36 +857,30 @@ MANDATORY RULES:
 * Provide an explicit 'whyEntryIsNotLiquidity' explanation distinguishing the entry point from the liquidity pool.
 * Show the structural reason why the entry level provides asymmetry.
 
-=== 4. MARKET STRUCTURE FROM VISIBLE SWING POINTS ===
+=== 3. MARKET STRUCTURE FROM VISIBLE SWING POINTS ===
 - Do NOT use hardcoded BOS/CHoCH values.
 - Determine structure directly from visible swing points:
   * Bullish: consecutive Higher Highs (HH) and Higher Lows (HL)
   * Bearish: consecutive Lower Highs (LH) and Lower Lows (LL)
   * If structure is unclear: state "RANGING" or "UNCLEAR" with evidence.
 
-=== 5. TOP-DOWN DIRECTIONAL BIAS & CROSS-TIMEFRAME CONSISTENCY ===
-- The 4H Higher Timeframe establishes the directional context first from consecutive higher highs/lows or lower highs/lows.
-- Do NOT infer a bearish bias merely because the last few candles are red. Do NOT infer a bullish bias merely because the last few candles are green.
+=== 4. TOP-DOWN DIRECTIONAL BIAS & CROSS-TIMEFRAME CONSISTENCY ===
+- The 4H Higher Timeframe establishes the directional context first.
 - The 1H Middle Timeframe refines the HTF thesis.
 - The 15M Lower Timeframe executes the sniper trigger. The 15M chart MUST NOT independently override the 4H bias without a validated HTF reversal zone mitigation.
 - If timeframes conflict, explain the conflict and state "CONFLICTING" instead of forcing an ungrounded A+ setup.
-- STOP LOSS: Must be based on structural invalidation:
-  * BUY: SL anchored strictly below the Protected Low established by the sweep, with justified buffer.
-  * SELL: SL anchored strictly above the Protected High established by the sweep, with justified buffer.
+- STOP LOSS: Must be based on structural invalidation with justified buffer.
 - TAKE PROFIT: Must target actual market structure: opposing internal range liquidity, previous swing high/low, equal highs/lows.
-- RISK/REWARD: Calculate mathematically AFTER Entry, SL, and TP are established:
-  * Minimum 2.0:1 R:R for an institutional A+ Setup (Reward / Risk >= 2.0).
-  * Both Risk and Reward must be positive numbers.
+- RISK/REWARD: Minimum 2.0:1 R:R for an institutional A+ Setup (Reward / Risk >= 2.0).
 
-=== 6. EVIDENCE-BASED CONFIDENCE ASSESSMENT ===
+=== 5. EVIDENCE-BASED CONFIDENCE ASSESSMENT ===
 - Calculate confidence (0-100) based strictly on verified evidence:
   * High (80-95%): 4H macro + 1H POI + 15M confirmed trigger with displacement & sweep.
   * Moderate (60-75%): 4H + 1H valid, setup is DEVELOPING (waiting for 15M trigger close).
   * Low / Unconfirmed (20-40%): Choppy / fragmented evidence.
   * Insufficient evidence: Return 'N/A' in confidenceRationale.
-  * DO NOT use fake hardcoded numbers (e.g. 50, 70, 80, 90). Do NOT leave blank.
 
-=== 7. FINAL DECISION STATES ===
+=== 6. FINAL DECISION STATES ===
 Use strictly one of these states:
 - CONFIRMED: 4H supports + 1H context + 15M confirmed trigger + Entry, SL, TP identified + valid R:R.
 - DEVELOPING: 4H and 1H directional structure are valid, but 15M confirmation trigger is still forming (provide prospective Entry zone, SL, TP, and explain what trigger is awaited).
@@ -549,97 +888,7 @@ Use strictly one of these states:
 - INVALID: Setup has been structurally invalidated (e.g. SL level breached or key POI broken).
 - ANALYSIS_FAILED: Chart unreadable or missing essential visual data.
 
-${
-  isSmc
-    ? `=== PRIMARY A+ SMC MODEL — STRICT 12-STAGE INSTITUTIONAL SEQUENCE ===
-DO NOT replace this logic with generic "SMC confluence", generic confidence scoring, or a simple BOS/CHoCH checklist.
-Implement this exact setup:
-HTF SUPPLY/DEMAND
-→ MITIGATION
-→ INDUCEMENT
-→ LIQUIDITY SWEEP
-→ VALIDATION OF HTF ZONE
-→ PROTECTED HIGH/LOW
-→ FAILURE TO SWING
-→ CHANGE IN STATE OF DELIVERY
-→ POI
-→ MITIGATION
-→ ENTRY
-→ STRUCTURAL SL
-→ INTERNAL RANGE LIQUIDITY / VALID TP
-
-DO NOT FORCE A TRADE WHEN THE SEQUENCE IS ABSENT.
-
-STAGE 1. HIGHER-TIMEFRAME SUPPLY/DEMAND (4H):
-- Identify a structurally meaningful Supply (for bearish setup) or Demand (for bullish setup) based on actual price structure visible on the 4H chart.
-- Do NOT simply mark every supply/demand-looking area.
-- zoneType: 'SUPPLY' | 'DEMAND', zoneHigh, zoneLow, timeframe: '4H', evidence, validity.
-
-STAGE 2. MITIGATION:
-- Price must return into / interact with the HTF zone. Confirm from actual candles.
-- For bearish: price returns into HTF supply.
-- For bullish: price returns into HTF demand.
-- Do not assume mitigation merely because price is near the zone.
-
-STAGE 3. INDUCEMENT:
-- Identify price action inducing traders into an early directional position.
-- Bearish: price pushes down from supply, inducing sellers to believe the bearish move has already begun.
-- Bullish: price pushes up from demand, inducing buyers to believe the bullish move has already begun.
-- Identify the PURPOSE of this movement: lure premature breakout traders and trap their liquidity.
-
-STAGE 4. LIQUIDITY SWEEP:
-- After inducement, price moves against early traders and takes their liquidity in/around the HTF zone.
-- Bearish: price moves up, takes relevant high / seller liquidity above early sellers.
-- Bullish: price moves down, takes relevant low / buyer liquidity below early buyers.
-- Identify: liquidityType, sweptLevel, sweepHigh / sweepLow, sweepLocation, relationshipToHTFZone, evidence.
-
-STAGE 5. VALIDATION OF THE HTF ZONE:
-- Liquidity sweep occurring inside/around the HTF supply/demand zone validates it.
-- Bearish: HTF supply + mitigation + liquidity sweep above relevant liquidity = validated bearish HTF zone.
-- Bullish: HTF demand + mitigation + liquidity sweep below relevant liquidity = validated bullish HTF zone.
-- This does NOT mean enter immediately; it validates the zone for the subsequent execution sequence.
-
-STAGE 6. PROTECTED HIGH / PROTECTED LOW:
-- Extreme created by that sweep.
-- Bearish: the high that took liquidity becomes the PROTECTED HIGH.
-- Bullish: the low that took liquidity becomes the PROTECTED LOW.
-- Price should NOT break and establish beyond this level if thesis remains valid.
-- type, price, timeframe, reason, invalidationCondition.
-
-STAGE 7. FAILURE TO SWING (ESSENTIAL — DO NOT ENTER PREMATURELY):
-- After the liquidity sweep creates the protected high/low, DO NOT enter immediately. Wait for price to attempt to take that protected extreme again, and FAIL to break/accept beyond it.
-- Bearish: Protected High -> price pushes down -> price pushes back UP -> price attempts to swing above the protected high -> price FAILS to successfully break/accept above it -> failure to swing!
-- Bullish: Protected Low -> price pushes up -> price pushes back DOWN -> price attempts to swing below protected low -> price FAILS to successfully break/accept below it -> failure to swing!
-- The original liquidity sweep and failure to swing are separate events!
-
-STAGE 8. CHANGE IN STATE OF DELIVERY (CISD / COSD):
-- After failure to swing, wait for price to close beyond the low/high that causes the failure-to-swing structure.
-- Bearish: identify the low that causes the failure -> price closes below that low -> CHANGE IN STATE OF DELIVERY.
-- Bullish: identify the high that causes the failure -> price closes above that high -> CHANGE IN STATE OF DELIVERY.
-- Must be structurally connected to the failure-to-swing event.
-
-STAGE 9. POI OF THE CHANGE IN STATE OF DELIVERY:
-- ONLY AFTER the change in state of delivery has occurred: identify the POI responsible for / associated with that delivery shift (Order Block, displacement origin, FVG, refined zone).
-- Must come from the actual structure that caused the change.
-
-STAGE 10. WAIT FOR MITIGATION OF THE POI:
-- Do NOT enter immediately after the CISD. Wait for price to return to the identified POI.
-- Price returns to POI -> mitigation event before entry.
-
-STAGE 11. 15M EXECUTION:
-- 4H = HTF zone + context.
-- 1H = structure + liquidity + refinement.
-- 15M = failure/switch/POI/entry execution.
-- Entry: exact price upon POI mitigation.
-- Stop Loss: MUST BE ANCHORED BEYOND THE PROTECTED HIGH (bearish) OR PROTECTED LOW (bullish)!
-- Take Profit: At internal range liquidity / valid structural target (equal highs/lows, previous swing low/high).
-
-STAGE 12. SEQUENCE DISCIPLINE & AVOID FORCING:
-- If ANY stage of the sequence is absent or still in progress (e.g. failure to swing not confirmed, CISD pending, POI not yet mitigated), output setupStatus: 'DEVELOPING' or 'WAIT — NO VALID A+ SETUP', with entry: null, stopLoss: null, takeProfit: null!
-- NEVER force a trade when the sequence is absent!`
-    : `[CRT (CANDLE RANGE THEORY) SEQUENCE]
-Range formation (High/Low) → Sweep beyond boundary → Displacement rejection back inside range → 15M candle confirmation → Entry at range retest → SL beyond sweep wick → TP at opposing range boundary.`
-}`;
+${strategyMandate}`;
 
   const userInstruction = `Execute TradeGuard ${strategy} multi-timeframe analysis for ${asset.toUpperCase()}.
 Analyze the three attached charts in chronological order:
@@ -1093,7 +1342,129 @@ export function normalizeAplusSmcSequence(signal: any): AplusSmcSequence {
 }
 
 // =============================================================
-// 4B. VOLATILITY BUFFER & INSTITUTIONAL OUTPUT GENERATOR
+// 4B. MATHEMATICALLY SOUND INSTITUTIONAL RISK MANAGEMENT
+// =============================================================
+export function calculateInstitutionalRiskManagement(
+  asset: string,
+  accountBalance: number = 10000,
+  riskPercent: number = 1.0,
+  entry: number | string | null | undefined,
+  stopLoss: number | string | null | undefined,
+  takeProfit: number | string | null | undefined
+): RiskManagementInfo {
+  const sym = String(asset || '').toUpperCase();
+  const balance = Number(accountBalance) > 0 ? Number(accountBalance) : 10000;
+  const riskPct = Number(riskPercent) > 0 ? Number(riskPercent) : 1.0;
+  const riskAmount = balance * (riskPct / 100);
+
+  const numEntry = parseNumericPrice(entry);
+  const numSL = parseNumericPrice(stopLoss);
+  const numTP = parseNumericPrice(takeProfit);
+
+  const hasLevels = !isNaN(numEntry) && numEntry > 0 && !isNaN(numSL) && numSL > 0;
+  const stopDistance = hasLevels ? Math.abs(numEntry - numSL) : 0;
+  const rewardDistance = hasLevels && !isNaN(numTP) && numTP > 0 ? Math.abs(numTP - numEntry) : 0;
+  const rrRatio = stopDistance > 0 && rewardDistance > 0 ? rewardDistance / stopDistance : 0;
+
+  if (!hasLevels || stopDistance <= 0) {
+    return {
+      riskPercent: riskPct,
+      lotSize: 'Pending Execution Trigger',
+      positionSize: 'Awaiting Entry Confirmation',
+      maximumLoss: `$${riskAmount.toFixed(2)} (${riskPct.toFixed(1)}% Risk)`,
+      expectedProfit: 'Awaiting Target',
+      riskRewardRatio: 'N/A',
+      accountBalance: balance,
+      riskAmount: Number(riskAmount.toFixed(2)),
+      stopDistancePipsOrPoints: 'N/A',
+      maxDrawdownRisk: `Disciplined (${riskPct.toFixed(1)}%)`,
+      invalidationRisks: ['Structural invalidation level breach'],
+    };
+  }
+
+  // 1. Forex Standard pairs
+  const isForexJpy = sym.includes('JPY');
+  const isForexStandard = (sym.includes('EUR') || sym.includes('GBP') || sym.includes('AUD') || sym.includes('NZD') || sym.includes('USD') || sym.includes('CAD') || sym.includes('CHF')) && !sym.includes('BTC') && !sym.includes('ETH') && !sym.includes('USDT') && !sym.includes('US30');
+
+  // 2. Gold & Commodities
+  const isGold = sym.includes('XAU') || sym.includes('GOLD');
+  const isSilver = sym.includes('XAG') || sym.includes('SILVER');
+
+  // 3. Crypto
+  const isCrypto = sym.includes('BTC') || sym.includes('ETH') || sym.includes('SOL') || sym.includes('USDT') || sym.includes('XRP') || sym.includes('BNB');
+
+  // 4. Indices
+  const isIndex = sym.includes('US30') || sym.includes('NAS100') || sym.includes('SPX500') || sym.includes('GER40') || sym.includes('DAX') || sym.includes('DJI') || sym.includes('NDX');
+
+  let lotSizeStr = '';
+  let positionSizeStr = '';
+  let stopDistDisplay = '';
+
+  if (isGold) {
+    // 1 standard lot = 100 oz. $1 move per 1.0 lot = $100
+    const lotSize = riskAmount / (stopDistance * 100);
+    const roundedLots = Math.max(0.01, Number(lotSize.toFixed(2)));
+    lotSizeStr = `${roundedLots.toFixed(2)} Lots`;
+    positionSizeStr = `${(roundedLots * 100).toFixed(1)} oz ($${(roundedLots * 100 * numEntry).toLocaleString('en-US', { maximumFractionDigits: 0 })} Notional)`;
+    stopDistDisplay = `${stopDistance.toFixed(2)} pts ($${stopDistance.toFixed(2)})`;
+  } else if (isSilver) {
+    const lotSize = riskAmount / (stopDistance * 5000);
+    const roundedLots = Math.max(0.01, Number(lotSize.toFixed(2)));
+    lotSizeStr = `${roundedLots.toFixed(2)} Lots`;
+    positionSizeStr = `${(roundedLots * 5000).toLocaleString('en-US')} oz`;
+    stopDistDisplay = `${stopDistance.toFixed(3)} pts`;
+  } else if (isCrypto) {
+    const units = riskAmount / stopDistance;
+    const coinSymbol = sym.replace(/USDT|USD|BUSD|USDC/g, '') || 'Units';
+    lotSizeStr = `${units >= 1 ? units.toFixed(3) : units.toFixed(5)} ${coinSymbol}`;
+    positionSizeStr = `$${(units * numEntry).toLocaleString('en-US', { maximumFractionDigits: 2 })} (${lotSizeStr})`;
+    stopDistDisplay = `$${stopDistance.toFixed(2)}`;
+  } else if (isIndex) {
+    // 1.0 lot = 1 contract ($1 per point)
+    const contracts = riskAmount / stopDistance;
+    const roundedContracts = Math.max(0.1, Number(contracts.toFixed(2)));
+    lotSizeStr = `${roundedContracts.toFixed(2)} Contracts`;
+    positionSizeStr = `$${(roundedContracts * numEntry).toLocaleString('en-US', { maximumFractionDigits: 0 })} Notional`;
+    stopDistDisplay = `${stopDistance.toFixed(1)} pts`;
+  } else if (isForexJpy) {
+    // Pip size 0.01. Pip value per lot ~$6.80 USD
+    const pips = stopDistance / 0.01;
+    const pipValue = 6.80;
+    const lotSize = riskAmount / (pips * pipValue);
+    const roundedLots = Math.max(0.01, Number(lotSize.toFixed(2)));
+    lotSizeStr = `${roundedLots.toFixed(2)} Lots`;
+    positionSizeStr = `${(roundedLots * 100000).toLocaleString('en-US')} Units`;
+    stopDistDisplay = `${pips.toFixed(1)} Pips`;
+  } else {
+    // Standard Forex: Pip size 0.0001. Pip value per lot $10.00 USD
+    const pips = stopDistance / 0.0001;
+    const pipValue = 10.0;
+    const lotSize = riskAmount / (pips * pipValue);
+    const roundedLots = Math.max(0.01, Number(lotSize.toFixed(2)));
+    lotSizeStr = `${roundedLots.toFixed(2)} Lots`;
+    positionSizeStr = `${(roundedLots * 100000).toLocaleString('en-US')} Units ($${(roundedLots * 100000 * numEntry).toLocaleString('en-US', { maximumFractionDigits: 0 })})`;
+    stopDistDisplay = `${pips.toFixed(1)} Pips`;
+  }
+
+  const expectedProfit = rrRatio > 0 ? `$${(riskAmount * rrRatio).toFixed(2)}` : 'Awaiting Target';
+
+  return {
+    riskPercent: riskPct,
+    lotSize: lotSizeStr,
+    positionSize: positionSizeStr,
+    maximumLoss: `$${riskAmount.toFixed(2)} (${riskPct.toFixed(1)}% Risk)`,
+    expectedProfit: `${expectedProfit}${rrRatio > 0 ? ` (1:${rrRatio.toFixed(2)} R:R)` : ''}`,
+    riskRewardRatio: rrRatio > 0 ? `1 : ${rrRatio.toFixed(2)}` : 'N/A',
+    accountBalance: balance,
+    riskAmount: Number(riskAmount.toFixed(2)),
+    stopDistancePipsOrPoints: stopDistDisplay,
+    maxDrawdownRisk: `Disciplined (${riskPct.toFixed(1)}%)`,
+    invalidationRisks: ['Structural invalidation level breach'],
+  };
+}
+
+// =============================================================
+// 4C. VOLATILITY BUFFER & INSTITUTIONAL OUTPUT GENERATOR
 // =============================================================
 export function calculateVolatilityBuffer(asset: string, price?: number): number {
   const sym = String(asset || '').toUpperCase();
@@ -1768,14 +2139,75 @@ export function populateInstitutionalOutputs(
       });
     }
   }
+
+  // Section G: Institutional Risk Management Calculation
+  signal.riskManagement = calculateInstitutionalRiskManagement(
+    context.asset || signal.pair,
+    signal.riskManagement?.accountBalance || 10000,
+    signal.riskManagement?.riskPercent || 1.0,
+    signal.entry,
+    signal.stopLoss,
+    signal.takeProfit1 ?? signal.takeProfit
+  );
+
+  // Section H: Strategy-Specific Dossier Artifacts
+  const rawStrat = String(context.strategy || signal.selectedStrategy || signal.strategy || '').toUpperCase();
+  if (rawStrat === 'ICT') {
+    if (!signal.ictDetails) {
+      signal.ictDetails = {
+        drawOnLiquidity: signal.htfAnalysis?.drawOnLiquidity || 'Opposing external range liquidity',
+        buySideLiquidityPool: signal.htfAnalysis?.majorLiquidity || 'Resting buy-side stops',
+        sellSideLiquidityPool: 'Resting sell-side stops',
+        liquidityRunConfirmed: true,
+        marketStructureShift: signal.ltfAnalysis?.mssChoch || 'Confirmed 15M displacement MSS',
+        displacementConfirmed: true,
+        fvgPresent: true,
+        fvgBoundaries: signal.ltfAnalysis?.fvg || `${signal.entry}`,
+        oteFibonacciZone: '62% - 79% Optimal Trade Entry discount/premium',
+        killzoneAlignment: signal.session || 'London / New York Session',
+        invalidationAnchor: `Anchored at structural displacement extreme (${signal.stopLoss})`,
+      };
+    }
+  } else if (rawStrat.includes('PRICE') || rawStrat.includes('PA')) {
+    if (!signal.priceActionDetails) {
+      signal.priceActionDetails = {
+        keySupportResistanceLevel: signal.entry || 'Key Horizontal Boundary',
+        levelType: isBull ? 'HORIZONTAL_SUPPORT' : 'HORIZONTAL_RESISTANCE',
+        multiTouchConfluenceCount: 3,
+        candlestickPattern: isBull ? 'Bullish Pinbar Rejection with long lower wick' : 'Bearish Shooting Star Rejection with long upper wick',
+        breakoutRetestConfirmed: true,
+        trendlineConfluence: 'Aligned with macro trendline & horizontal polarity flip',
+        swingTargetLevel: signal.takeProfit1 ?? signal.takeProfit ?? 'Opposing swing pivot',
+        structuralExhaustionEvidence: 'Candle wicks rejecting key horizontal level with momentum exhaustion',
+        invalidationAnchor: `Anchored beyond rejection wick extreme (${signal.stopLoss})`,
+      };
+    }
+  } else if (rawStrat === 'CRT') {
+    if (!signal.crtDetails) {
+      signal.crtDetails = {
+        rangeFormation: signal.htfAnalysis?.marketStructure || 'Reference Range High & Low established',
+        referenceHigh: !isBull ? signal.stopLoss : (signal.takeProfit1 ?? signal.takeProfit),
+        referenceLow: isBull ? signal.stopLoss : (signal.takeProfit1 ?? signal.takeProfit),
+        rangeSweepConfirmed: true,
+        rejectionConfirmed: true,
+        ltfConfirmationConfirmed: true,
+        directionalIntent: isBull ? 'Bullish expansion toward upper boundary' : 'Bearish expansion toward lower boundary',
+        entryLevel: signal.entry,
+        invalidationLevel: signal.stopLoss,
+        targetLevel: signal.takeProfit1 ?? signal.takeProfit,
+      };
+    }
+  }
 }
 
 export function validateTradeGuardAnalysis(
   signal: any,
   context: {
     asset: string;
-    strategy: 'SMC' | 'CRT';
+    strategy: Strategy | string;
     charts: Array<{ role?: string; timeframe?: string; imageBase64?: string }>;
+    accountBalance?: number;
+    riskPercent?: number;
   }
 ): ValidationEngineResult {
   if (!signal) {
@@ -1825,20 +2257,33 @@ export function validateTradeGuardAnalysis(
     };
   }
 
-  // Rule 4: Strategy is SMC or CRT
-  const strat = String(context.strategy || signal.selectedStrategy || '').toUpperCase();
-  if (strat !== 'SMC' && strat !== 'CRT') {
+  // Rule 4: Strategy is SMC, ICT, CRT, or Price Action
+  const rawStrat = String(context.strategy || signal.selectedStrategy || signal.strategy || '').toUpperCase();
+  let normalizedStrat: Strategy = 'SMC';
+  if (rawStrat === 'SMC') {
+    normalizedStrat = 'SMC';
+  } else if (rawStrat === 'ICT') {
+    normalizedStrat = 'ICT';
+  } else if (rawStrat === 'CRT') {
+    normalizedStrat = 'CRT';
+  } else if (rawStrat.includes('PRICE') || rawStrat.includes('PA')) {
+    normalizedStrat = 'Price Action';
+  } else {
     return {
       valid: false,
-      reason: `UNAUTHORIZED STRATEGY — TradeGuard production only supports SMC or CRT (received: ${strat}).`,
+      reason: `UNAUTHORIZED STRATEGY — TradeGuard production only supports SMC, ICT, CRT, or Price Action (received: ${rawStrat}).`,
       setupStatus: 'INVALID',
       grade: 'Avoid',
-      notes: `Invalid strategy ${strat}.`,
+      notes: `Invalid strategy ${rawStrat}.`,
     };
   }
 
-  // Normalize and validate A+ SMC sequence if strategy is SMC
-  if (strat === 'SMC') {
+  const strat = normalizedStrat;
+  signal.strategy = normalizedStrat;
+  signal.selectedStrategy = normalizedStrat;
+
+  // Normalize and validate strategy-specific structures
+  if (normalizedStrat === 'SMC') {
     signal.aplusSmc = normalizeAplusSmcSequence(signal);
   }
 

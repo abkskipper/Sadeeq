@@ -213,6 +213,26 @@ export const SAMPLE_CHARTS: SampleChartPreset[] = [
     description: 'Asian range high sweep with NY session reversal target',
     dataUrl: generateCandlestickChartSvg('BTCUSDT', 'H4', 'bearish', 104850, 420),
   },
+  {
+    id: 'nas100-4h-ict',
+    asset: 'NAS100',
+    assetClass: 'Indices',
+    timeframe: 'H4',
+    strategy: 'ICT',
+    title: 'NAS100 — ICT Killzone & Fair Value Gap',
+    description: '4H Draw on Liquidity with 15M OTE 62-79% retracement entry',
+    dataUrl: generateCandlestickChartSvg('NAS100', 'H4', 'bullish', 20450, 85),
+  },
+  {
+    id: 'usdjpy-4h-price-action',
+    asset: 'USDJPY',
+    assetClass: 'Forex',
+    timeframe: 'H4',
+    strategy: 'Price Action',
+    title: 'USD/JPY — Classical S/R Polarity Flip',
+    description: 'Horizontal resistance flipped to support with pinbar rejection',
+    dataUrl: generateCandlestickChartSvg('USDJPY', 'H4', 'bullish', 153.25, 0.45),
+  },
 ];
 
 export function getMultiTimeframeSetForPreset(presetId: string): MultiTimeframeChartSet {
@@ -225,6 +245,10 @@ export function getMultiTimeframeSetForPreset(presetId: string): MultiTimeframeC
       return generateMultiTimeframeChartSet('GBPUSD', 1.2950, 0.0020, 'bullish', 'H4', 'H1', 'M15');
     case 'btcusdt-4h-crt':
       return generateMultiTimeframeChartSet('BTCUSDT', 104850, 420, 'bearish', 'H4', 'H1', 'M15');
+    case 'nas100-4h-ict':
+      return generateMultiTimeframeChartSet('NAS100', 20450, 85, 'bullish', 'H4', 'H1', 'M15');
+    case 'usdjpy-4h-price-action':
+      return generateMultiTimeframeChartSet('USDJPY', 153.25, 0.45, 'bullish', 'H4', 'H1', 'M15');
     default:
       return generateMultiTimeframeChartSet('XAUUSD', 4594.2, 24.5, 'bullish', 'H4', 'H1', 'M15');
   }

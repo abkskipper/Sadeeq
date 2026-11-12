@@ -19,6 +19,7 @@ import {
   Zap,
 } from 'lucide-react';
 import { TradeSignal } from '../types';
+import { formatSafeSessionDate } from '../lib/tradeGuardEngine';
 
 interface InstitutionalResultsPanelProps {
   signal: TradeSignal;
@@ -80,9 +81,7 @@ export const InstitutionalResultsPanel: React.FC<InstitutionalResultsPanelProps>
           <div className="flex items-center gap-2 self-start sm:self-auto">
             <span className="flex items-center gap-1.5 text-xs font-mono text-slate-400 bg-slate-950 px-3 py-1.5 rounded-lg border border-slate-800">
               <Clock className="h-3.5 w-3.5 text-slate-400" />
-              {overview?.analysisTimestamp
-                ? new Date(overview.analysisTimestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })
-                : new Date().toLocaleTimeString()}
+              {formatSafeSessionDate(overview?.analysisTimestamp || signal.created_at || signal.timestamp, 'full')}
             </span>
           </div>
         </div>

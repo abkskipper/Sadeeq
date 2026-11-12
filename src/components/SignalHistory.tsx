@@ -15,6 +15,7 @@ import {
   Eye,
 } from 'lucide-react';
 import { TradeSignal } from '../types';
+import { formatSafeSessionDate } from '../lib/tradeGuardEngine';
 
 interface SignalHistoryProps {
   signals: TradeSignal[];
@@ -171,7 +172,7 @@ export const SignalHistory: React.FC<SignalHistoryProps> = ({
                     {/* Asset & TF */}
                     <td className="py-3.5 px-4">
                       <div className="font-bold text-white text-sm">{s.asset}</div>
-                      <span className="text-[10px] text-slate-400">{s.timeframe} · {new Date(s.created_at).toLocaleDateString()}</span>
+                      <span className="text-[10px] text-slate-400">{s.timeframe} · {formatSafeSessionDate(s.created_at, 'date')}</span>
                     </td>
 
                     {/* Engine */}

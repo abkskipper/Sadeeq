@@ -6,6 +6,58 @@
 
 const imageCache = new Map<string, { dataUrl: string; mimeType: string }>();
 
+/**
+ * Validates magic bytes / header signatures for common web image formats.
+ */
+export function validateImageSignature(dataUrl: string): { valid: boolean; mimeType: string; format: string } {
+  if (!dataUrl || typeof dataUrl !== 'string') {
+    return { valid: false, mimeType: '', format: 'unknown' };
+  }
+
+  if (dataUrl.startsWith('data:image/svg+xml') || dataUrl.trim().startsWith('<svg')) {
+    return { valid: true, mimeType: 'image/svg+xml', format: 'svg' };
+  }
+
+  // Extract base64 payload
+  const commaIdx = dataUrl.indexOf(',');
+  const b64 = commaIdx !== -1 ? dataUrl.substring(commaIdx + 1) : dataUrl;
+
+  try {
+    const rawHead = atob(b64.substring(0, 32));
+    const bytes = new Uint8Array(rawHead.length);
+    for (let i = 0; i < rawHead.length; i++) {
+      bytes[i] = rawHead.charCodeAt(i);
+    }
+
+    // JPEG: FF D8 FF
+    if (bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff) {
+      return { valid: true, mimeType: 'image/jpeg', format: 'jpeg' };
+    }
+
+    // PNG: 89 50 4E 47 (0x89 'PNG')
+    if (bytes[0] === 0x89 && bytes[1] === 0x50 && bytes[2] === 0x4e && bytes[3] === 0x47) {
+      return { valid: true, mimeType: 'image/png', format: 'png' };
+    }
+
+    // WebP: RIFF ... WEBP
+    if (
+      bytes[0] === 0x52 && bytes[1] === 0x49 && bytes[2] === 0x46 && bytes[3] === 0x46 &&
+      bytes[8] === 0x57 && bytes[9] === 0x45 && bytes[10] === 0x42 && bytes[11] === 0x50
+    ) {
+      return { valid: true, mimeType: 'image/webp', format: 'webp' };
+    }
+
+    // Fallback: If declared as image data URL
+    if (dataUrl.startsWith('data:image/jpeg')) return { valid: true, mimeType: 'image/jpeg', format: 'jpeg' };
+    if (dataUrl.startsWith('data:image/png')) return { valid: true, mimeType: 'image/png', format: 'png' };
+    if (dataUrl.startsWith('data:image/webp')) return { valid: true, mimeType: 'image/webp', format: 'webp' };
+
+    return { valid: false, mimeType: 'unknown', format: 'invalid' };
+  } catch {
+    return { valid: false, mimeType: 'unknown', format: 'corrupt' };
+  }
+}
+
 export async function normalizeChartImage(dataUrl: string): Promise<{ dataUrl: string; mimeType: string }> {
   if (!dataUrl) {
     return { dataUrl: '', mimeType: 'image/jpeg' };
@@ -17,8 +69,8 @@ export async function normalizeChartImage(dataUrl: string): Promise<{ dataUrl: s
     return imageCache.get(cacheKey)!;
   }
 
-  // If already a standard compact JPEG under 200KB, skip canvas rasterization
-  if (dataUrl.startsWith('data:image/jpeg') && dataUrl.length < 200000) {
+  // If already a standard compact JPEG under 350KB, use directly
+  if (dataUrl.startsWith('data:image/jpeg') && dataUrl.length < 350000) {
     const res = { dataUrl, mimeType: 'image/jpeg' };
     imageCache.set(cacheKey, res);
     return res;
@@ -97,28 +149,33 @@ export async function normalizeChartImage(dataUrl: string): Promise<{ dataUrl: s
     img.onload = () => {
       clearTimeout(loadTimeout);
       try {
-        const maxW = 1100;
-        const maxH = 680;
-        let width = img.naturalWidth || img.width || 1000;
-        let height = img.naturalHeight || img.height || 620;
+        const maxDim = 1600;
+        let width = img.naturalWidth || img.width || 1200;
+        let height = img.naturalHeight || img.height || 800;
 
-        if (width > maxW || height > maxH) {
-          const ratio = Math.min(maxW / width, maxH / height);
-          width = Math.round(width * ratio);
-          height = Math.round(height * ratio);
+        // Preserve exact aspect ratio strictly — never distort or crop candles/wicks
+        if (width > maxDim || height > maxDim) {
+          if (width >= height) {
+            height = Math.round((height * maxDim) / width);
+            width = maxDim;
+          } else {
+            width = Math.round((width * maxDim) / height);
+            height = maxDim;
+          }
         }
 
         const canvas = document.createElement('canvas');
-        canvas.width = Math.max(width, 480);
-        canvas.height = Math.max(height, 320);
+        canvas.width = Math.max(width, 100);
+        canvas.height = Math.max(height, 100);
         const ctx = canvas.getContext('2d', { alpha: false });
 
         if (ctx) {
           ctx.fillStyle = '#0b0f17';
           ctx.fillRect(0, 0, canvas.width, canvas.height);
+          // Draw using exact target dimensions preserving aspect ratio
           ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
           
-          const compressedUrl = canvas.toDataURL('image/jpeg', 0.80);
+          const compressedUrl = canvas.toDataURL('image/jpeg', 0.82);
           cleanup();
           const result = { dataUrl: compressedUrl, mimeType: 'image/jpeg' };
           imageCache.set(cacheKey, result);

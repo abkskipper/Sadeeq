@@ -232,7 +232,7 @@ export function App() {
   };
 
   return (
-    <div className="min-h-screen bg-[#0b0e14] text-slate-100 font-sans flex flex-col selection:bg-emerald-500/30 selection:text-emerald-200">
+    <div className="min-h-screen bg-[#0b0e14] text-slate-100 font-sans flex flex-col selection:bg-emerald-500/30 selection:text-emerald-200 w-full max-w-full overflow-x-clip">
       {/* Navigation Bar */}
       <Navbar
         activeTab={activeTab}
@@ -245,7 +245,7 @@ export function App() {
       />
 
       {/* Main View Router */}
-      <main className="flex-1">
+      <main className="flex-1 w-full max-w-full overflow-x-clip">
         {activeTab === 'landing' && (
           <LandingPage
             onOpenTerminal={() => setActiveTab('terminal')}
@@ -256,6 +256,7 @@ export function App() {
         {activeTab === 'terminal' && (
           <Terminal
             user={user}
+            inspectedSignal={inspectedSignal}
             onOpenAuth={() => setAuthModalOpen(true)}
             onSaveToWatchlist={handleSaveToWatchlist}
             isWatchlisted={isWatchlisted}

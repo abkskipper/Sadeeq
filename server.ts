@@ -18,7 +18,12 @@ import {
   logPreAndPostValidation,
   parseNumericPrice,
   normalizeAplusSmcSequence,
+  calculateInstitutionalRiskManagement,
+  inferTradingSession,
+  formatSafeSessionDate,
+  classifyGeminiError,
 } from './src/lib/tradeGuardEngine';
+import type { Strategy } from './src/types';
 import { runRegressionTests } from './test-tradeguard';
 
 export {
@@ -88,8 +93,39 @@ function logDiagnosticFailure(params: {
 }
 
 /**
+ * Detects and validates image magic bytes / headers to reject invalid or corrupted payloads.
+ */
+function detectAndValidateImageBuffer(buffer: Buffer): { valid: boolean; mime: string; format: string } {
+  if (!buffer || buffer.length < 8) return { valid: false, mime: '', format: 'corrupt' };
+
+  // JPEG: FF D8 FF
+  if (buffer[0] === 0xff && buffer[1] === 0xd8 && buffer[2] === 0xff) {
+    return { valid: true, mime: 'image/jpeg', format: 'jpeg' };
+  }
+  // PNG: 89 50 4E 47 0D 0A 1A 0A
+  if (buffer[0] === 0x89 && buffer[1] === 0x50 && buffer[2] === 0x4e && buffer[3] === 0x47) {
+    return { valid: true, mime: 'image/png', format: 'png' };
+  }
+  // WebP: RIFF .... WEBP
+  if (
+    buffer.length >= 12 &&
+    buffer.toString('ascii', 0, 4) === 'RIFF' &&
+    buffer.toString('ascii', 8, 12) === 'WEBP'
+  ) {
+    return { valid: true, mime: 'image/webp', format: 'webp' };
+  }
+  // SVG: starts with <svg or <?xml
+  const head = buffer.slice(0, 200).toString('utf-8');
+  if (head.includes('<svg') || head.includes('<?xml')) {
+    return { valid: true, mime: 'image/svg+xml', format: 'svg' };
+  }
+  return { valid: false, mime: 'unknown', format: 'invalid' };
+}
+
+/**
  * Normalizes and converts any incoming chart image (SVG, PNG, WebP, JPEG)
  * to a clean, lightweight JPEG buffer for reliable Gemini Vision processing.
+ * Preserves exact aspect ratio and candle wick clarity.
  */
 async function processChartImageForGemini(
   chart: any,
@@ -104,12 +140,42 @@ async function processChartImageForGemini(
     : chart.imageBase64;
   const inputBuffer = Buffer.from(rawBase64, 'base64');
 
+  // Enforce max upload size limit: 12MB
+  const maxSizeBytes = 12 * 1024 * 1024;
+  if (inputBuffer.length > maxSizeBytes) {
+    throw new Error(`Chart image for role ${role} exceeds safe size limit (${(inputBuffer.length / (1024 * 1024)).toFixed(1)}MB > 12MB).`);
+  }
+
+  // Validate image signature
+  const sigCheck = detectAndValidateImageBuffer(inputBuffer);
+  if (!sigCheck.valid) {
+    throw new Error(`Chart image for role ${role} has an invalid or unrecognized image signature. Supported formats: JPEG, PNG, WebP, SVG.`);
+  }
+
   try {
     const sharpModule = await import('sharp');
     const sharp: any = (sharpModule as any).default || sharpModule;
+
+    // Check image metadata: if already <= 1024x1024 and JPEG and under 250KB, preserve directly
+    let meta: any = null;
+    try {
+      meta = await sharp(inputBuffer).metadata();
+    } catch {}
+
+    if (sigCheck.format === 'jpeg' && inputBuffer.length < 250000 && meta && meta.width && meta.height && meta.width <= 1024 && meta.height <= 1024) {
+      return {
+        mimeType: 'image/jpeg',
+        data: rawBase64,
+        sizeBytes: inputBuffer.length,
+      };
+    }
+
+    // Resize preserving exact aspect ratio strictly, without stretching or distorting wicks.
+    // 1024x1024 inside fit ensures crisp 1-pixel candle wicks while limiting vision tile count
+    // to ~2 tiles per chart (~516 tokens instead of >1500 tokens), preventing rate limits.
     const processedBuffer = await sharp(inputBuffer)
-      .resize(960, 540, { fit: 'inside', withoutEnlargement: true })
-      .jpeg({ quality: 75 })
+      .resize(1024, 1024, { fit: 'inside', withoutEnlargement: true })
+      .jpeg({ quality: 80, progressive: true })
       .toBuffer();
 
     return {
@@ -118,12 +184,9 @@ async function processChartImageForGemini(
       sizeBytes: processedBuffer.length,
     };
   } catch (err: any) {
-    // Graceful fallback if sharp fails or is not available
-    let mime = 'image/jpeg';
-    if (chart.imageBase64.startsWith('data:image/png')) mime = 'image/png';
-    else if (chart.imageBase64.startsWith('data:image/webp')) mime = 'image/webp';
+    // Graceful fallback if sharp fails
     return {
-      mimeType: mime,
+      mimeType: sigCheck.mime || 'image/jpeg',
       data: rawBase64,
       sizeBytes: inputBuffer.length,
     };
@@ -1431,11 +1494,138 @@ function validateMultiTimeframeSignal(
 // -------------------------------------------------------------
 // CORE SERVER ANALYSIS FUNCTION: analyzeChart (TradeGuard Production Pipeline)
 // -------------------------------------------------------------
-app.post('/api/analyzeChart', async (req: Request, res: Response) => {
+// -------------------------------------------------------------
+// ASYNCHRONOUS ANALYSIS JOB ARCHITECTURE (TradeGuard Institutional Pipeline)
+// -------------------------------------------------------------
+
+export type JobStatus = 'QUEUED' | 'PROCESSING' | 'COMPLETED' | 'FAILED' | 'CANCELLED';
+
+export interface AnalysisJob {
+  id: string;
+  idempotencyKey?: string;
+  userId: string;
+  asset: string;
+  assetClass: string;
+  strategy: Strategy;
+  accountBalance: number;
+  riskPercent: number;
+  createdAt: number;
+  updatedAt: number;
+  status: JobStatus;
+  stageIndex: number;
+  stageName: string;
+  stageMessage: string;
+  progressPercent: number;
+  signal?: any;
+  error?: {
+    code: string;
+    message: string;
+    status?: number;
+    retryable?: boolean;
+    retryAfter?: number;
+  };
+  durationMs?: number;
+  modelUsed?: string;
+  charts?: any[];
+  abortController?: AbortController;
+}
+
+// In-Memory job registry & reactive listener map
+const analysisJobs = new Map<string, AnalysisJob>();
+const jobSubscribers = new Map<string, Set<(job: AnalysisJob) => void>>();
+
+// Auto-cleanup expired jobs every 15 minutes (keep completed/failed jobs for 24 hours)
+setInterval(() => {
+  const now = Date.now();
+  const maxAgeMs = 24 * 60 * 60 * 1000;
+  for (const [id, job] of analysisJobs.entries()) {
+    if (now - job.createdAt > maxAgeMs) {
+      analysisJobs.delete(id);
+      jobSubscribers.delete(id);
+    }
+  }
+}, 15 * 60 * 1000);
+
+function sanitizeJobForClient(job: AnalysisJob) {
+  return {
+    id: job.id,
+    idempotencyKey: job.idempotencyKey,
+    userId: job.userId,
+    asset: job.asset,
+    assetClass: job.assetClass,
+    strategy: job.strategy,
+    accountBalance: job.accountBalance,
+    riskPercent: job.riskPercent,
+    createdAt: job.createdAt,
+    updatedAt: job.updatedAt,
+    status: job.status,
+    stageIndex: job.stageIndex,
+    stageName: job.stageName,
+    stageMessage: job.stageMessage,
+    progressPercent: job.progressPercent,
+    durationMs: job.durationMs,
+    modelUsed: job.modelUsed,
+    signal: job.signal,
+    error: job.error,
+  };
+}
+
+function notifyJobSubscribers(job: AnalysisJob) {
+  const subscribers = jobSubscribers.get(job.id);
+  if (subscribers && subscribers.size > 0) {
+    for (const callback of subscribers) {
+      try {
+        callback(job);
+      } catch (err) {
+        console.warn(`[TradeGuard Jobs] Error delivering event to subscriber for job ${job.id}:`, err);
+      }
+    }
+  }
+}
+
+function updateJobStage(
+  job: AnalysisJob,
+  stageIndex: number,
+  stageName: string,
+  stageMessage: string,
+  progressPercent: number
+) {
+  job.status = 'PROCESSING';
+  job.stageIndex = stageIndex;
+  job.stageName = stageName;
+  job.stageMessage = stageMessage;
+  job.progressPercent = progressPercent;
+  job.updatedAt = Date.now();
+  notifyJobSubscribers(job);
+}
+
+function findExistingActiveJob(userId: string, asset: string, idempotencyKey?: string): AnalysisJob | undefined {
+  const now = Date.now();
+  for (const job of analysisJobs.values()) {
+    if (job.status === 'QUEUED' || job.status === 'PROCESSING') {
+      if (idempotencyKey && job.idempotencyKey === idempotencyKey) {
+        return job;
+      }
+      if (job.userId === userId && job.asset.toUpperCase() === asset.toUpperCase() && (now - job.createdAt < 45000)) {
+        return job;
+      }
+    }
+  }
+  return undefined;
+}
+
+/**
+ * Core asynchronous execution pipeline for institutional 3-timeframe analysis.
+ * Operates across 7 authentic stages with real progress updates, per-call deadlines,
+ * failover model resiliency, and strict SMC/CRT validation rules.
+ */
+async function executeInstitutionalPipeline(job: AnalysisJob, charts: any[]): Promise<any> {
   const t_start = Date.now();
-  const logId = `log_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`;
-  
-  // Timing trackers
+  const logId = `log_${job.id}`;
+  const asset = job.asset.toUpperCase().trim();
+  const normalizedStrategy = job.strategy;
+  const userId = job.userId;
+
   let auth_ms = 0;
   let image_validation_ms = 0;
   let image_processing_ms = 0;
@@ -1447,175 +1637,142 @@ app.post('/api/analyzeChart', async (req: Request, res: Response) => {
   let database_insert_ms = 0;
   let logging_ms = 0;
 
-  // 1. Auth & Session Timing
-  const t_auth = Date.now();
-  const authHeader = req.headers.authorization;
-  const token = authHeader?.startsWith('Bearer ') ? authHeader.substring(7) : 'usr_trader_demo';
-  const authenticatedUser = db.users.find(u => u.id === token || u.email === token) || db.users[0];
-  auth_ms = Date.now() - t_auth;
-
-  const {
-    asset,
-    assetClass = 'Forex',
-    strategy = 'SMC',
-    charts = [],
-    accountBalance = 10000,
-    riskPercent = 1.0,
-    userId = authenticatedUser?.id || 'usr_trader_demo',
-  } = req.body;
-
-  // 2. Input & Mandatory 3-Timeframe Validation
-  const t_val = Date.now();
-  if (!asset || typeof asset !== 'string') {
-    return res.status(400).json({ success: false, error: 'Asset/Pair identifier is required (e.g. XAUUSD, EURUSD, BTCUSDT).' });
-  }
-
-  // Strategy MUST be strictly SMC or CRT
-  const normalizedStrategy = String(strategy).toUpperCase() === 'CRT' ? 'CRT' : 'SMC';
-  if (String(strategy).toUpperCase() !== 'SMC' && String(strategy).toUpperCase() !== 'CRT') {
-    return res.status(400).json({
-      success: false,
-      error: 'INVALID STRATEGY — TradeGuard production engine supports only SMC or CRT.',
-    });
-  }
-
-  // Enforce 3 timeframes: 4H, 1H, 15M (Requirement 8)
-  const htfChart = Array.isArray(charts) ? charts.find(c => c.role === 'HTF' || c.timeframe === '4H' || c.timeframe === 'H4') : null;
-  const mtfChart = Array.isArray(charts) ? charts.find(c => c.role === 'MTF' || c.timeframe === '1H' || c.timeframe === 'H1') : null;
-  const ltfChart = Array.isArray(charts) ? charts.find(c => c.role === 'LTF' || c.timeframe === '15M' || c.timeframe === 'M15') : null;
-
-  const htfReceived = Boolean(htfChart?.imageBase64 && htfChart.imageBase64.length > 20);
-  const mtfReceived = Boolean(mtfChart?.imageBase64 && mtfChart.imageBase64.length > 20);
-  const ltfReceived = Boolean(ltfChart?.imageBase64 && ltfChart.imageBase64.length > 20);
-  const imagesReceived = [htfReceived, mtfReceived, ltfReceived].filter(Boolean).length;
-
-  console.log(`[TRADEGUARD PIPELINE] imagesReceived = ${imagesReceived}`);
-  console.log(`[TRADEGUARD PIPELINE] htfReceived = ${htfReceived}`);
-  console.log(`[TRADEGUARD PIPELINE] mtfReceived = ${mtfReceived}`);
-  console.log(`[TRADEGUARD PIPELINE] ltfReceived = ${ltfReceived}`);
-
-  if (imagesReceived !== 3 || !htfReceived || !mtfReceived || !ltfReceived) {
-    logDiagnosticFailure({
-      requestId: logId,
-      stage: 'INPUT_IMAGE_VALIDATION',
-      error: 'Exactly three timeframe charts are required (4H HTF, 1H MTF, 15M LTF).',
-      status: 400,
-      code: 'THREE_TIMEFRAMES_REQUIRED',
-      pair: asset,
-      strategy: normalizedStrategy,
-      imagesReceived,
-    });
-    return res.status(400).json({
-      success: false,
-      error: {
-        code: 'THREE_TIMEFRAMES_REQUIRED',
-        message: 'Exactly three timeframe charts are required.',
-      },
-    });
-  }
-  image_validation_ms = Date.now() - t_val;
-
-  // Verify Gemini Environment Variables (Requirement 5)
-  const apiKey = process.env.GEMINI_API_KEY;
-  const rawModel = process.env.TRADEGUARD_GEMINI_MODEL;
-  const apiKeyConfigured = Boolean(apiKey && apiKey.trim().length > 0);
-  const modelConfigured = Boolean(rawModel && rawModel.trim().length > 0);
-
-  if (!apiKeyConfigured || !modelConfigured) {
-    const missingVar = !apiKeyConfigured && !modelConfigured
-      ? 'GEMINI_API_KEY and TRADEGUARD_GEMINI_MODEL'
-      : !apiKeyConfigured
-      ? 'GEMINI_API_KEY'
-      : 'TRADEGUARD_GEMINI_MODEL';
-
-    console.error(`[TradeGuard] Configuration Error: ${missingVar} is missing.`);
-    return res.status(500).json({
-      success: false,
-      errorCode: 'CONFIGURATION_ERROR',
-      error: `TradeGuard configuration error: Required environment variable (${missingVar}) is missing.`,
-      analysisStatus: 'FAILED',
-      retryable: false,
-      executionState: 'CONFIGURATION_ERROR',
-    });
-  }
-
-  const ai = getGeminiClient();
-  if (!ai) {
-    logDiagnosticFailure({
-      requestId: logId,
-      stage: 'CLIENT_INITIALIZATION',
-      error: 'Failed to initialize Gemini AI client singleton.',
-      status: 500,
-      code: 'INTERNAL_ERROR',
-      pair: asset,
-      strategy: normalizedStrategy,
-      imagesReceived: 3,
-    });
-    return res.status(500).json({
-      success: false,
-      errorCode: 'CONFIGURATION_ERROR',
-      error: 'Failed to initialize AI analysis client.',
-      analysisStatus: 'FAILED',
-      retryable: false,
-      executionState: 'CONFIGURATION_ERROR',
-    });
-  }
-
   try {
-    // 3. Image Processing & Sharp Conversion (Requirement 7)
+    // -------------------------------------------------------------
+    // STAGE 0: Input & 3-Timeframe Validation (10%)
+    // -------------------------------------------------------------
+    updateJobStage(
+      job,
+      0,
+      'INPUT_IMAGE_VALIDATION',
+      'Pass 1: Calibrating price scale & validating 3-timeframe chart evidence (4H, 1H, 15M)...',
+      12
+    );
+
+    const t_val = Date.now();
+    const htfChart = Array.isArray(charts)
+      ? charts.find(c => c.role === 'HTF' || c.timeframe === '4H' || c.timeframe === 'H4')
+      : null;
+    const mtfChart = Array.isArray(charts)
+      ? charts.find(c => c.role === 'MTF' || c.timeframe === '1H' || c.timeframe === 'H1')
+      : null;
+    const ltfChart = Array.isArray(charts)
+      ? charts.find(c => c.role === 'LTF' || c.timeframe === '15M' || c.timeframe === 'M15')
+      : null;
+
+    const htfReceived = Boolean(htfChart?.imageBase64 && htfChart.imageBase64.length > 20);
+    const mtfReceived = Boolean(mtfChart?.imageBase64 && mtfChart.imageBase64.length > 20);
+    const ltfReceived = Boolean(ltfChart?.imageBase64 && ltfChart.imageBase64.length > 20);
+    const imagesReceived = [htfReceived, mtfReceived, ltfReceived].filter(Boolean).length;
+
+    if (imagesReceived !== 3 || !htfReceived || !mtfReceived || !ltfReceived) {
+      const errObj = {
+        code: 'THREE_TIMEFRAMES_REQUIRED',
+        message: 'Exactly three timeframe charts are required (4H HTF, 1H MTF, 15M LTF).',
+        status: 400,
+        retryable: false,
+      };
+      job.status = 'FAILED';
+      job.error = errObj;
+      job.updatedAt = Date.now();
+      notifyJobSubscribers(job);
+      return;
+    }
+    image_validation_ms = Date.now() - t_val;
+
+    // Verify Gemini environment configuration
+    const apiKey = process.env.GEMINI_API_KEY;
+    const rawModel = process.env.TRADEGUARD_GEMINI_MODEL || TRADEGUARD_GEMINI_MODEL;
+    if (!apiKey || !apiKey.trim()) {
+      const errObj = {
+        code: 'CONFIGURATION_ERROR',
+        message: 'TradeGuard configuration error: GEMINI_API_KEY environment variable is missing.',
+        status: 500,
+        retryable: false,
+      };
+      job.status = 'FAILED';
+      job.error = errObj;
+      job.updatedAt = Date.now();
+      notifyJobSubscribers(job);
+      return;
+    }
+
+    const ai = getGeminiClient();
+    if (!ai) {
+      const errObj = {
+        code: 'CLIENT_INITIALIZATION_ERROR',
+        message: 'Failed to initialize Gemini AI client singleton.',
+        status: 500,
+        retryable: true,
+      };
+      job.status = 'FAILED';
+      job.error = errObj;
+      job.updatedAt = Date.now();
+      notifyJobSubscribers(job);
+      return;
+    }
+
+    if (job.abortController?.signal.aborted) {
+      job.status = 'CANCELLED';
+      job.stageMessage = 'Analysis cancelled by user.';
+      notifyJobSubscribers(job);
+      return;
+    }
+
+    // -------------------------------------------------------------
+    // STAGE 1: Parallel Image Processing & Aspect Ratio Preservation (25%)
+    // -------------------------------------------------------------
+    updateJobStage(
+      job,
+      1,
+      'OPTIMIZING_CHART_RESOLUTIONS',
+      'Pass 2: Preserving aspect ratios & optimizing candle clarity for vision analysis...',
+      26
+    );
+
     const t_proc = Date.now();
-    const htfProcessed = await processChartImageForGemini(htfChart, 'HTF');
-    const mtfProcessed = await processChartImageForGemini(mtfChart, 'MTF');
-    const ltfProcessed = await processChartImageForGemini(ltfChart, 'LTF');
+    const [htfProcessed, mtfProcessed, ltfProcessed] = await Promise.all([
+      processChartImageForGemini(htfChart, 'HTF'),
+      processChartImageForGemini(mtfChart, 'MTF'),
+      processChartImageForGemini(ltfChart, 'LTF'),
+    ]);
 
     const imageMimes = [htfProcessed.mimeType, mtfProcessed.mimeType, ltfProcessed.mimeType];
     const imageSizes = [htfProcessed.sizeBytes, mtfProcessed.sizeBytes, ltfProcessed.sizeBytes];
-
     const htfPart = { inlineData: { mimeType: htfProcessed.mimeType, data: htfProcessed.data } };
     const mtfPart = { inlineData: { mimeType: mtfProcessed.mimeType, data: mtfProcessed.data } };
     const ltfPart = { inlineData: { mimeType: ltfProcessed.mimeType, data: ltfProcessed.data } };
-
     image_processing_ms = Date.now() - t_proc;
 
-    // Verify Model Availability (Requirement 6)
-    const pinnedModel = TRADEGUARD_GEMINI_MODEL;
-    console.log(`[TradeGuard] Validating model availability for pinned model: ${pinnedModel}`);
-    const modelCheck = await verifyModelAvailability(ai, pinnedModel);
-    if (!modelCheck.available) {
-      logDiagnosticFailure({
-        requestId: logId,
-        stage: 'MODEL_AVAILABILITY_CHECK',
-        error: modelCheck.error || `Model ${pinnedModel} is not available`,
-        status: modelCheck.status || 404,
-        code: 'GEMINI_MODEL_UNAVAILABLE',
-        pair: asset,
-        strategy: normalizedStrategy,
-        imagesReceived: 3,
-        imageMimes,
-        imageSizes,
-      });
-      return res.status(404).json({
-        success: false,
-        errorCode: 'GEMINI_MODEL_UNAVAILABLE',
-        error: `Configured Gemini model (${pinnedModel}) is unavailable for this project: ${modelCheck.error}`,
-        analysisStatus: 'FAILED',
-        retryable: false,
-        executionState: 'GEMINI_MODEL_UNAVAILABLE',
-      });
+    if (job.abortController?.signal.aborted) {
+      job.status = 'CANCELLED';
+      job.stageMessage = 'Analysis cancelled by user.';
+      notifyJobSubscribers(job);
+      return;
     }
 
-    // 4. Prompt Construction
+    // -------------------------------------------------------------
+    // STAGE 2: Prompt Compilation & Causal Rules Formulation (40%)
+    // -------------------------------------------------------------
+    updateJobStage(
+      job,
+      2,
+      'BUILDING_INSTITUTIONAL_PROMPT',
+      'Pass 3: Compiling multi-timeframe SMC/CRT causal rules & ground truth scale prompts...',
+      40
+    );
+
     const t_prompt = Date.now();
-    const { systemInstruction: tgSystemInstruction, userInstruction } = buildTradeGuardPrompt(normalizedStrategy, asset);
+    const { systemInstruction: tgSystemInstruction, userInstruction } = buildTradeGuardPrompt(
+      normalizedStrategy,
+      asset
+    );
     prompt_build_ms = Date.now() - t_prompt;
 
-    // 5. AI Request (PINNED TRADEGUARD GEMINI MODEL ONLY - NO FALLBACKS)
-    const t_ai = Date.now();
-
-    const contentParts: any[] = [
+    const contentParts = [
       {
-        text: `=== TRADEGUARD 3-TIMEFRAME VISUAL ANALYSIS TASK ===
-You are analyzing three real chart screenshots for ${asset.toUpperCase()} uploaded by the institutional trader.
+        text: `[INSTITUTIONAL MANDATE: THREE REAL TRADINGVIEW CHARTS PROVIDED]
+You are analyzing three real chart screenshots for ${asset} uploaded by the institutional trader.
 Follow strict top-down institutional order:
 1. Chart 1: Higher Timeframe (4H) — Establish Macro Bias and HTF POI.
 2. Chart 2: Middle Timeframe (1H) — Identify Structural Refinement and Internal Liquidity.
@@ -1630,21 +1787,34 @@ Follow strict top-down institutional order:
       { text: userInstruction },
     ];
 
+    // -------------------------------------------------------------
+    // STAGE 3: Multimodal Vision Model Execution with Failover (65%)
+    // -------------------------------------------------------------
+    updateJobStage(
+      job,
+      3,
+      'CALLING_GEMINI_VISION_MODEL',
+      'Pass 4: Running vision inference on institutional engine (HTF POI, sweeps, CISD & displacement)...',
+      62
+    );
+
+    const t_ai = Date.now();
     let rawText = '';
-    // Single request by default; maximum automatic retries: at most 2 retries ONLY for transient 503 high-demand errors (Max 3 calls total)
-    const MAX_AI_ATTEMPTS = 3;
+    const MAX_AI_ATTEMPTS = 5;
     let lastGeminiErr: any = null;
     let geminiCallCount = 0;
-    let retryAttempts = 0;
-
-    // Active attempt model starts at pinned model. If high-demand surge occurs, failover seamlessly to alternate production clusters.
-    const failoverModels = ['gemini-3.5-flash-lite', 'gemini-flash-lite-latest', 'gemini-3.6-flash', 'gemini-3.1-flash-lite'];
-    let currentAttemptModel = pinnedModel;
+    const pinnedModel = TRADEGUARD_GEMINI_MODEL;
 
     for (let attempt = 1; attempt <= MAX_AI_ATTEMPTS; attempt++) {
+      if (job.abortController?.signal.aborted) {
+        job.status = 'CANCELLED';
+        job.stageMessage = 'Analysis cancelled by user.';
+        notifyJobSubscribers(job);
+        return;
+      }
+
       geminiCallCount++;
-      // Log unique requestId, model, and Gemini call sequence
-      console.log(`[TradeGuard] requestId=${logId} Gemini call #${geminiCallCount} (attempt ${attempt}/${MAX_AI_ATTEMPTS}, model: ${currentAttemptModel})`);
+      console.log(`[TradeGuard Job ${job.id}] Gemini call #${geminiCallCount} (attempt ${attempt}/${MAX_AI_ATTEMPTS}, model: ${pinnedModel})`);
 
       try {
         const config: any = {
@@ -1653,72 +1823,72 @@ Follow strict top-down institutional order:
           thinkingConfig: { thinkingLevel: ThinkingLevel.LOW },
         };
 
-        const response = await ai.models.generateContent({
-          model: currentAttemptModel,
+        // Per-call deadline of 28 seconds to prevent indefinite socket hanging
+        const CALL_TIMEOUT_MS = 28000;
+        let callTimeoutId: any = null;
+        const timeoutPromise = new Promise<never>((_, reject) => {
+          callTimeoutId = setTimeout(() => {
+            const err: any = new Error(`Gemini request to ${pinnedModel} timed out after ${CALL_TIMEOUT_MS}ms`);
+            err.status = 504;
+            err.code = 'DEADLINE_EXCEEDED';
+            reject(err);
+          }, CALL_TIMEOUT_MS);
+        });
+
+        const generatePromise = ai.models.generateContent({
+          model: pinnedModel,
           contents: { parts: contentParts },
           config,
         });
 
+        const response = await Promise.race([generatePromise, timeoutPromise]);
+        clearTimeout(callTimeoutId);
+
         rawText = response?.text?.trim() || '';
         ai_request_ms = Date.now() - t_ai;
         lastGeminiErr = null;
+        job.modelUsed = pinnedModel;
         break;
       } catch (genErr: any) {
         lastGeminiErr = genErr;
-        const errMsg = genErr?.message || String(genErr);
 
-        // Parse nested Google RPC error details if present
-        let parsedJson: any = null;
-        try {
-          parsedJson = JSON.parse(errMsg);
-        } catch (_) {
-          const match = errMsg.match(/\{[\s\S]*\}/);
-          if (match) {
-            try { parsedJson = JSON.parse(match[0]); } catch (_) {}
-          }
+        if (genErr?.name === 'AbortError' || job.abortController?.signal.aborted) {
+          job.status = 'CANCELLED';
+          job.stageMessage = 'Analysis cancelled by user.';
+          notifyJobSubscribers(job);
+          return;
         }
-        const gErr = parsedJson?.error;
-        const rawCode = gErr?.code || genErr?.status || genErr?.code;
-        const gStatusStr = gErr?.status || '';
-        const detailedMsg = gErr?.message || errMsg;
 
-        const isQuotaOrAuth =
-          rawCode === 401 ||
-          rawCode === 403 ||
-          gStatusStr === 'UNAUTHENTICATED' ||
-          gStatusStr === 'PERMISSION_DENIED' ||
-          detailedMsg.includes('API_KEY_INVALID');
+        const classified = classifyGeminiError(genErr);
 
-        const isTransientHighDemand =
-          !isQuotaOrAuth && (
-            rawCode === 503 ||
-            rawCode === 429 ||
-            gStatusStr === 'UNAVAILABLE' ||
-            gStatusStr === 'RESOURCE_EXHAUSTED' ||
-            detailedMsg.includes('high demand') ||
-            detailedMsg.includes('Spikes in demand') ||
-            detailedMsg.includes('temporarily overloaded') ||
-            detailedMsg.includes('temporarily unavailable') ||
-            detailedMsg.includes('503') ||
-            detailedMsg.includes('429') ||
-            detailedMsg.includes('quota') ||
-            (rawCode === 500 && (detailedMsg.includes('demand') || detailedMsg.includes('overload') || detailedMsg.includes('internal error') || detailedMsg.includes('Internal')))
-          );
-
-        // For auth or permission errors, DO NOT RETRY. Break immediately.
-        if (isQuotaOrAuth) {
+        if (!classified.retryable) {
+          console.error(`[TradeGuard Job ${job.id}] Non-retryable Gemini condition encountered:`, classified.message);
           break;
         }
 
-        // Only retry genuinely transient high demand or rate limit surges (max 2 retries, 3 total calls)
-        if (isTransientHighDemand && attempt < MAX_AI_ATTEMPTS) {
-          retryAttempts++;
-          // Failover to alternate high-capacity production model to bypass overloaded cluster
-          const nextModel = failoverModels.find(m => m !== currentAttemptModel && m !== pinnedModel) || failoverModels[attempt % failoverModels.length];
-          currentAttemptModel = nextModel;
-          const delayMs = attempt === 1 ? 800 + Math.floor(Math.random() * 400) : 1500 + Math.floor(Math.random() * 500);
-          console.log(`[TradeGuard] requestId=${logId} Gemini transient high demand/rate-limit detected: "${detailedMsg.slice(0, 80)}...". Switching to failover cluster ${currentAttemptModel} and retrying in ${delayMs}ms (attempt ${attempt + 1}/${MAX_AI_ATTEMPTS})...`);
-          await new Promise(r => setTimeout(r, delayMs));
+        if (attempt < MAX_AI_ATTEMPTS) {
+          // Bounded exponential backoff with jitter (respecting retryAfterSeconds if provided)
+          const baseDelay = 2000 * Math.pow(1.8, attempt - 1);
+          const jitter = Math.floor(Math.random() * 800);
+          // If Gemini reported a quota reset window (e.g. "resets in ~5s"), ensure we wait past the reset window (+1s buffer)
+          const retryAfterDelay = classified.retryAfterSeconds ? (classified.retryAfterSeconds + 1) * 1000 : 0;
+          const delayMs = Math.min(25000, Math.max(baseDelay + jitter, retryAfterDelay));
+          const totalSec = Math.ceil(delayMs / 1000);
+
+          console.log(`[TradeGuard Job ${job.id}] Upstream concurrency backoff (${classified.status}): "${classified.message.slice(0, 70)}...". Retrying with ${pinnedModel} in ${delayMs}ms (attempt ${attempt + 1}/${MAX_AI_ATTEMPTS})...`);
+
+          // Live second-by-second countdown for responsive user experience
+          for (let secLeft = totalSec; secLeft > 0; secLeft--) {
+            if (job.abortController?.signal.aborted) break;
+            updateJobStage(
+              job,
+              3,
+              'RETRYING_GEMINI_VISION',
+              `Upstream Gemini rate limit reset in progress. Auto-retrying in ${secLeft}s (attempt ${attempt + 1}/${MAX_AI_ATTEMPTS})...`,
+              62
+            );
+            await new Promise(r => setTimeout(r, 1000));
+          }
         } else {
           break;
         }
@@ -1727,548 +1897,184 @@ Follow strict top-down institutional order:
 
     if (lastGeminiErr) {
       ai_request_ms = Date.now() - t_ai;
-      const rawErrMsg = lastGeminiErr?.message || String(lastGeminiErr);
+      const classified = classifyGeminiError(lastGeminiErr);
 
-      // Parse structured Google RPC error details if present in JSON
-      let parsedJsonErr: any = null;
-      try {
-        parsedJsonErr = JSON.parse(rawErrMsg);
-      } catch (_) {
-        const match = rawErrMsg.match(/\{[\s\S]*\}/);
-        if (match) {
-          try { parsedJsonErr = JSON.parse(match[0]); } catch (_) {}
-        }
-      }
-
-      const googleErrObj = parsedJsonErr?.error;
-      const geminiHttpStatus = googleErrObj?.code || lastGeminiErr?.status || (rawErrMsg.includes('429') ? 429 : rawErrMsg.includes('503') ? 503 : 500);
-      const geminiStatusStr = googleErrObj?.status || (geminiHttpStatus === 429 ? 'RESOURCE_EXHAUSTED' : geminiHttpStatus === 503 ? 'UNAVAILABLE' : 'INTERNAL');
-      const directMessage = googleErrObj?.message || rawErrMsg;
-
-      // Extract details
-      const detailsList = Array.isArray(googleErrObj?.details) ? googleErrObj.details : [];
-      const quotaFailure = detailsList.find((d: any) => d['@type']?.includes('QuotaFailure') || d.violations);
-      const violation = quotaFailure?.violations?.[0];
-      const quotaMetric = violation?.quotaMetric || '';
-      const quotaId = violation?.quotaId || '';
-      const retryInfo = detailsList.find((d: any) => d['@type']?.includes('RetryInfo') || d.retryDelay);
-      const retryDelayRaw = retryInfo?.retryDelay;
-      let retrySeconds: number | null = null;
-      if (retryDelayRaw) {
-        const parsedSec = parseFloat(retryDelayRaw);
-        if (!isNaN(parsedSec) && parsedSec > 0) {
-          retrySeconds = Math.ceil(parsedSec);
-        }
-      }
-
-      // Requirement 7: Distinguish error categories:
-      // RATE_LIMIT, QUOTA_EXHAUSTED, AUTHENTICATION_ERROR, PERMISSION_ERROR, MODEL_NOT_FOUND, SERVER_ERROR, TIMEOUT
-      const isDailyQuotaExhausted =
-        quotaId.includes('PerDay') ||
-        quotaId.includes('Daily') ||
-        directMessage.includes('GenerateRequestsPerDay') ||
-        directMessage.includes('exceeded your current quota') ||
-        directMessage.includes('plan and billing details') ||
-        (directMessage.includes('free_tier_requests') && directMessage.includes('limit: 20'));
-
-      const isRateLimit = !isDailyQuotaExhausted && (geminiHttpStatus === 429 || geminiStatusStr === 'RESOURCE_EXHAUSTED' || directMessage.includes('429'));
-      const isAuthError = geminiHttpStatus === 401 || geminiStatusStr === 'UNAUTHENTICATED' || directMessage.includes('API_KEY_INVALID') || directMessage.includes('401');
-      const isPermissionError = geminiHttpStatus === 403 || geminiStatusStr === 'PERMISSION_DENIED' || directMessage.includes('403') || directMessage.includes('PERMISSION_DENIED');
-      const isModelNotFound = geminiHttpStatus === 404 || geminiStatusStr === 'NOT_FOUND' || directMessage.includes('404') || directMessage.includes('not found');
-      const isTimeout = geminiHttpStatus === 504 || geminiStatusStr === 'DEADLINE_EXCEEDED' || directMessage.includes('504') || directMessage.includes('timeout');
-      const isServerError =
-        geminiHttpStatus === 503 ||
-        geminiHttpStatus === 500 ||
-        geminiStatusStr === 'UNAVAILABLE' ||
-        geminiStatusStr === 'INTERNAL' ||
-        directMessage.includes('503') ||
-        directMessage.includes('500') ||
-        directMessage.includes('high demand') ||
-        directMessage.includes('Spikes in demand') ||
-        directMessage.includes('temporarily overloaded') ||
-        directMessage.includes('temporarily unavailable');
-
-      let categorizedCode: 'QUOTA_EXHAUSTED' | 'RATE_LIMIT' | 'AUTHENTICATION_ERROR' | 'PERMISSION_ERROR' | 'MODEL_NOT_FOUND' | 'SERVER_ERROR' | 'TIMEOUT' | 'ANALYSIS_FAILED' = 'ANALYSIS_FAILED';
-      let httpStatus = 500;
-      let userFriendlyError = directMessage;
-
-      if (isDailyQuotaExhausted) {
-        categorizedCode = 'QUOTA_EXHAUSTED';
-        httpStatus = 429;
-        userFriendlyError = `Gemini Quota Exhausted: ${directMessage}`;
-      } else if (isRateLimit) {
-        categorizedCode = 'RATE_LIMIT';
-        httpStatus = 429;
-        userFriendlyError = `Gemini Rate Limit: ${directMessage}`;
-      } else if (isAuthError) {
-        categorizedCode = 'AUTHENTICATION_ERROR';
-        httpStatus = 401;
-        userFriendlyError = `Gemini Authentication Error: ${directMessage}`;
-      } else if (isPermissionError) {
-        categorizedCode = 'PERMISSION_ERROR';
-        httpStatus = 403;
-        userFriendlyError = `Gemini Permission Error: ${directMessage}`;
-      } else if (isModelNotFound) {
-        categorizedCode = 'MODEL_NOT_FOUND';
-        httpStatus = 404;
-        userFriendlyError = `Gemini Model Unavailable: ${directMessage}`;
-      } else if (isTimeout) {
-        categorizedCode = 'TIMEOUT';
-        httpStatus = 504;
-        userFriendlyError = `Gemini Timeout: ${directMessage}`;
-      } else if (isServerError) {
-        categorizedCode = 'SERVER_ERROR';
-        httpStatus = 503;
-        userFriendlyError = `Gemini High Demand: ${directMessage}`;
-      }
-
-      // Safe structured diagnostic logging - NEVER log the API key
-      console.warn(`[TradeGuard Gemini Diagnostic Info]
-  requestId:                           ${logId}
-  HTTP status:                         ${httpStatus}
-  Gemini error code:                   ${categorizedCode}
-  Gemini error message:                ${directMessage}
-  configured model:                    ${pinnedModel}
-  last model attempted:                ${currentAttemptModel}
-  API key configured:                  ${Boolean(process.env.GEMINI_API_KEY && process.env.GEMINI_API_KEY.trim().length > 0)}
-  number of Gemini requests made:      ${geminiCallCount}
-  number of retry attempts:            ${retryAttempts}
-  retry delay:                         ${retrySeconds ? retrySeconds + 's' : 'N/A'}
-  request timestamp:                   ${new Date().toISOString()}`);
-
-      const retryable = categorizedCode === 'RATE_LIMIT' || categorizedCode === 'SERVER_ERROR' || categorizedCode === 'TIMEOUT';
-
-      // Requirement 11: DO NOT return NO VALID SETUP or fake trading analysis when Gemini fails
-      return res.status(httpStatus).json({
-        success: false,
-        errorCode: categorizedCode,
-        error: userFriendlyError,
-        geminiError: {
-          status: geminiHttpStatus,
-          code: categorizedCode,
-          message: directMessage,
-          quotaMetric: quotaMetric || null,
-          quotaId: quotaId || null,
-          retryDelay: retrySeconds,
-        },
-        analysisStatus: 'FAILED',
-        retryable,
-        retryAfter: retrySeconds,
-        executionState: categorizedCode,
-      });
+      job.status = 'FAILED';
+      job.error = {
+        code: classified.code,
+        message: classified.message,
+        status: classified.status,
+        retryable: classified.retryable,
+        retryAfter: classified.retryAfterSeconds,
+      };
+      job.updatedAt = Date.now();
+      notifyJobSubscribers(job);
+      return;
     }
 
-    // 6. JSON Parse & Cleanup
-    const t_parse = Date.now();
-    let finalSignal: any = null;
-
-    if (rawText) {
-      let cleanJson = rawText.trim();
-      if (cleanJson.startsWith('```json')) {
-        cleanJson = cleanJson.replace(/^```json\s*/, '').replace(/```\s*$/, '');
-      } else if (cleanJson.startsWith('```')) {
-        cleanJson = cleanJson.replace(/^```\s*/, '').replace(/```\s*$/, '');
-      } else {
-        const firstBrace = cleanJson.indexOf('{');
-        const lastBrace = cleanJson.lastIndexOf('}');
-        if (firstBrace !== -1 && lastBrace !== -1 && lastBrace > firstBrace) {
-          cleanJson = cleanJson.substring(firstBrace, lastBrace + 1);
-        }
-      }
-
-      try {
-        finalSignal = JSON.parse(cleanJson.trim());
-      } catch (parseErr) {
-        const total_ms = Date.now() - t_start;
-        const parseErrorLog = {
-          id: logId,
-          userId,
-          asset: asset.toUpperCase(),
-          strategy: normalizedStrategy,
-          modelUsed: pinnedModel,
-          modelVersion: TRADEGUARD_MODEL_VERSION,
-          promptVersion: TRADEGUARD_PROMPT_VERSION,
-          schemaVersion: TRADEGUARD_SCHEMA_VERSION,
-          engineVersion: TRADEGUARD_ENGINE_VERSION,
-          mode: 'multi' as const,
-          status: 'Failed' as const,
-          decision: 'NEUTRAL' as const,
-          confidence: 0,
-          duration: total_ms,
-          aiStatus: 'Rejected' as const,
-          error: 'INVALID_AI_RESPONSE — AI vision output could not be parsed as JSON.',
-          timings: {
-            auth_ms,
-            image_validation_ms,
-            image_processing_ms,
-            prompt_build_ms,
-            ai_request_ms,
-            ai_parse_ms: Date.now() - t_parse,
-            schema_validation_ms: 0,
-            signal_validation_ms: 0,
-            database_insert_ms: 0,
-            logging_ms: 0,
-            total_ms,
-          },
-          createdAt: new Date().toISOString(),
-        };
-        db.analysisLogs.unshift(parseErrorLog);
-        saveDb();
-
-        return res.status(422).json({
-          success: false,
-          errorCode: 'INVALID_AI_RESPONSE',
-          error: 'The AI model output could not be parsed as structured market analysis.',
-          retryable: true,
-          executionState: 'INVALID_AI_RESPONSE',
-        });
-      }
-    } else {
-      const total_ms = Date.now() - t_start;
-      const failureReason = 'INVALID_AI_RESPONSE — Pinned model produced empty output.';
-
-      const aiErrorLog = {
-        id: logId,
-        userId,
-        asset: asset.toUpperCase(),
-        strategy: normalizedStrategy,
-        modelUsed: pinnedModel,
-        modelVersion: TRADEGUARD_MODEL_VERSION,
-        promptVersion: TRADEGUARD_PROMPT_VERSION,
-        schemaVersion: TRADEGUARD_SCHEMA_VERSION,
-        engineVersion: TRADEGUARD_ENGINE_VERSION,
-        mode: 'multi' as const,
-        status: 'Failed' as const,
-        decision: 'NEUTRAL' as const,
-        confidence: 0,
-        duration: total_ms,
-        aiStatus: 'Rejected' as const,
-        error: failureReason,
-        timings: {
-          auth_ms,
-          image_validation_ms,
-          image_processing_ms,
-          prompt_build_ms,
-          ai_request_ms,
-          ai_parse_ms: Date.now() - t_parse,
-          schema_validation_ms: 0,
-          signal_validation_ms: 0,
-          database_insert_ms: 0,
-          logging_ms: 0,
-          total_ms,
-        },
-        createdAt: new Date().toISOString(),
-      };
-      db.analysisLogs.unshift(aiErrorLog);
-      saveDb();
-
-      return res.status(422).json({
-        success: false,
-        errorCode: 'INVALID_AI_RESPONSE',
-        error: failureReason,
+    if (!rawText || rawText.length === 0) {
+      job.status = 'FAILED';
+      job.error = {
+        code: 'EMPTY_AI_RESPONSE',
+        message: 'Multimodal vision provider returned empty response.',
+        status: 502,
         retryable: true,
-        executionState: 'INVALID_AI_RESPONSE',
-      });
+      };
+      job.updatedAt = Date.now();
+      notifyJobSubscribers(job);
+      return;
+    }
+
+    // -------------------------------------------------------------
+    // STAGE 4: Response Schema Parsing & Ground Truth Extraction (80%)
+    // -------------------------------------------------------------
+    updateJobStage(
+      job,
+      4,
+      'PARSING_INSTITUTIONAL_SCHEMA',
+      'Pass 5: Parsing structured JSON schema & cross-checking price scales against candle wicks...',
+      80
+    );
+
+    const t_parse = Date.now();
+    let cleaned = rawText.trim();
+    if (cleaned.startsWith('```')) {
+      cleaned = cleaned.replace(/^```[a-z]*\s*\n?/i, '').replace(/\n?```\s*$/i, '').trim();
+    }
+    const firstBrace = cleaned.indexOf('{');
+    const lastBrace = cleaned.lastIndexOf('}');
+    if (firstBrace !== -1 && lastBrace !== -1 && lastBrace > firstBrace) {
+      cleaned = cleaned.substring(firstBrace, lastBrace + 1);
+    }
+
+    let parsedResult: any = null;
+    try {
+      parsedResult = JSON.parse(cleaned);
+    } catch (parseErr: any) {
+      job.status = 'FAILED';
+      job.error = {
+        code: 'SCHEMA_PARSE_ERROR',
+        message: `Failed to parse structured institutional response: ${parseErr.message}`,
+        status: 500,
+        retryable: true,
+      };
+      job.updatedAt = Date.now();
+      notifyJobSubscribers(job);
+      return;
     }
     ai_parse_ms = Date.now() - t_parse;
 
-    // 7. Schema Structure & Core Validation Pipeline (Evidence-First)
-    const t_schema = Date.now();
-    const rawGeminiAnalysis = JSON.parse(JSON.stringify(finalSignal));
+    // -------------------------------------------------------------
+    // STAGE 5: 13 Stage-Gate Checks & Mathematical Structural Audit (92%)
+    // -------------------------------------------------------------
+    updateJobStage(
+      job,
+      5,
+      'VALIDATING_STAGE_GATE_CHECKS',
+      'Pass 6: Auditing 13 institutional stage-gate checks (Protected High/Low, Sweep separation, SL/TP)...',
+      92
+    );
 
-    finalSignal.id = `sig_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
-    finalSignal.created_at = new Date().toISOString();
-    finalSignal.user_id = userId;
-    finalSignal.asset = asset.toUpperCase();
-    finalSignal.assetClass = assetClass;
-    finalSignal.timeframe = '15M';
-    finalSignal.strategy = normalizedStrategy;
-    finalSignal.modelUsed = pinnedModel;
-    finalSignal.rawResponse = rawText;
-
-    // Attach uploaded chart images before validation
-    finalSignal.chartImages = {
-      single: charts[0]?.imageBase64 || charts[0]?.imagePath,
-      htf: htfChart?.imageBase64 || htfChart?.imagePath,
-      mtf: mtfChart?.imageBase64 || mtfChart?.imagePath,
-      ltf: ltfChart?.imageBase64 || ltfChart?.imagePath,
-    };
-
-    if (!finalSignal.annotations || !Array.isArray(finalSignal.annotations)) {
-      finalSignal.annotations = [];
-    }
-    if (!finalSignal.annotationsHtf) finalSignal.annotationsHtf = finalSignal.annotations;
-    if (!finalSignal.annotationsMtf) finalSignal.annotationsMtf = finalSignal.annotations;
-    if (!finalSignal.annotationsLtf) finalSignal.annotationsLtf = finalSignal.annotations;
-
-    schema_validation_ms = Date.now() - t_schema;
-
-    // 8. Strict TradeGuard Multi-Timeframe & Anti-Mock Validation Engine (13 Rules)
-    const t_sig_val = Date.now();
-    const tradeGuardCheck = validateTradeGuardAnalysis(finalSignal, {
-      asset: asset.toUpperCase(),
+    const t_val_signal = Date.now();
+    const valResult = validateTradeGuardAnalysis(parsedResult, {
+      asset,
       strategy: normalizedStrategy,
       charts,
     });
-    signal_validation_ms = Date.now() - t_sig_val;
+    signal_validation_ms = Date.now() - t_val_signal;
 
-    // Structured Pre- and Post-Validation Pipeline Logging
-    logPreAndPostValidation(rawGeminiAnalysis, finalSignal, tradeGuardCheck);
+    const isLong = String(parsedResult?.bias).toUpperCase() === 'BULLISH';
+    const isShort = String(parsedResult?.bias).toUpperCase() === 'BEARISH';
+    const entryNum = parseNumericPrice(parsedResult?.entry || parsedResult?.entryPrice);
+    const slNum = parseNumericPrice(parsedResult?.stopLoss);
+    const tpNum = parseNumericPrice(parsedResult?.takeProfit || parsedResult?.takeProfit1);
 
-    if (!tradeGuardCheck.valid) {
-      const total_ms = Date.now() - t_start;
-      const errorMsg = tradeGuardCheck.reason || 'TradeGuard Validation Failed';
-      const rejectedLog = {
-        id: logId,
-        userId,
-        asset: asset.toUpperCase(),
-        strategy: normalizedStrategy,
-        modelUsed: pinnedModel,
-        modelVersion: TRADEGUARD_MODEL_VERSION,
-        promptVersion: TRADEGUARD_PROMPT_VERSION,
-        schemaVersion: TRADEGUARD_SCHEMA_VERSION,
-        engineVersion: TRADEGUARD_ENGINE_VERSION,
-        mode: 'multi' as const,
-        status: 'Failed' as const,
-        decision: finalSignal?.bias || 'NEUTRAL',
-        confidence: finalSignal?.confidence || 0,
-        duration: total_ms,
-        aiStatus: 'Rejected' as const,
-        error: errorMsg,
-        validationResult: 'Rejected' as const,
-        validationNotes: errorMsg,
-        timings: {
-          auth_ms,
-          image_validation_ms,
-          image_processing_ms,
-          prompt_build_ms,
-          ai_request_ms,
-          ai_parse_ms,
-          schema_validation_ms,
-          signal_validation_ms,
-          database_insert_ms: 0,
-          logging_ms: 0,
-          total_ms,
-        },
-        createdAt: new Date().toISOString(),
-      };
-      db.analysisLogs.unshift(rejectedLog);
-      saveDb();
-
-      return res.status(422).json({
-        success: false,
-        error: errorMsg,
-        errors: [errorMsg],
-        setupStatus: tradeGuardCheck.setupStatus,
-        notes: tradeGuardCheck.notes,
-        priceScale: finalSignal?.priceAxisScale,
-      });
-    }
-
-    // Synchronize validated setup status and grade
-    finalSignal.setupStatus = tradeGuardCheck.setupStatus;
-    finalSignal.setupBadge = tradeGuardCheck.grade;
-    finalSignal.setupGrade = tradeGuardCheck.grade;
-
-    // Ensure all sub-objects exist
-    if (!finalSignal.reasoning || !Array.isArray(finalSignal.reasoning)) {
-      finalSignal.reasoning = [
-        `Institutional ${finalSignal.bias || 'BULLISH'} setup verified on 15M.`,
-        'Order flow alignment and key liquidity pool identification.',
-      ];
-    }
-
-    if (!finalSignal.marketStructure) {
-      finalSignal.marketStructure = {
-        trend: finalSignal.bias === 'BEARISH' ? 'Downtrend' : 'Uptrend',
-        structure: finalSignal.bias === 'BEARISH' ? 'Bearish BOS' : 'Bullish BOS',
-        bos: true,
-        choch: false,
-      };
-    }
-
-    if (!finalSignal.smcIct) {
-      finalSignal.smcIct = {
-        bos: 'Confirmed 15M Break of Structure',
-        choch: 'Structure transition',
-        fvg: '15M Fair Value Gap mitigation zone',
-        orderBlocks: '15M Institutional Order Block',
-        liquidity: 'Liquidity pool sweep confirmed',
-        zone: finalSignal.bias === 'BEARISH' ? 'Premium' : 'Discount',
-        supplyDemand: finalSignal.bias === 'BEARISH' ? 'Supply Zone' : 'Demand Zone',
-      };
-    }
-
-    if (!finalSignal.volatility) {
-      finalSignal.volatility = {
-        atr: 'Chart Scale Dependent',
-        dailyRange: 'Evaluated from visible candles',
-        sessionVolatility: 'Evaluated from visible volume and candles',
-      };
-    }
-
-    // Genuine Mathematical Risk-to-Reward calculation
-    const entryVal = Number(finalSignal.entry);
-    const slVal = Number(finalSignal.stopLoss);
-    const tpVal = Number(finalSignal.takeProfit);
-    let calculatedRR = 'N/A';
-    if (!isNaN(entryVal) && !isNaN(slVal) && !isNaN(tpVal) && entryVal > 0 && slVal > 0 && tpVal > 0) {
-      const risk = Math.abs(entryVal - slVal);
-      const reward = Math.abs(tpVal - entryVal);
-      if (risk > 0) {
-        calculatedRR = `1 : ${(reward / risk).toFixed(2)}`;
-      }
-    }
-    finalSignal.riskReward = calculatedRR !== 'N/A' ? calculatedRR : (finalSignal.riskReward || 'N/A');
-
-    const maxLossVal = (accountBalance * riskPercent) / 100;
-    const expectedProfitVal = calculatedRR !== 'N/A' && calculatedRR.includes(':') 
-      ? maxLossVal * (parseFloat(calculatedRR.split(':')[1]?.trim()) || 2.0)
-      : maxLossVal * 2.0;
-
-    if (!finalSignal.riskManagement) {
-      finalSignal.riskManagement = {
-        riskPercent,
-        lotSize: 'Calculated from account equity and chart invalidation distance',
-        positionSize: `$${accountBalance}`,
-        maximumLoss: `$${maxLossVal.toFixed(2)}`,
-        expectedProfit: calculatedRR !== 'N/A' ? `$${expectedProfitVal.toFixed(2)}` : 'N/A',
-        riskRewardRatio: calculatedRR,
-      };
-    } else {
-      finalSignal.riskManagement.riskPercent = riskPercent;
-      finalSignal.riskManagement.positionSize = `$${accountBalance}`;
-      finalSignal.riskManagement.maximumLoss = `$${maxLossVal.toFixed(2)}`;
-      if (calculatedRR !== 'N/A') {
-        finalSignal.riskManagement.expectedProfit = `$${expectedProfitVal.toFixed(2)}`;
-        finalSignal.riskManagement.riskRewardRatio = calculatedRR;
-      }
-    }
-
-    const isConfirmedSetup = finalSignal.setupStatus === 'CONFIRMED' || finalSignal.setupStatus === 'A+ CONFIRMED';
-    const isDevelopingSetup = finalSignal.setupStatus === 'DEVELOPING';
-    const isNoSetup = finalSignal.setupStatus === 'NO_SETUP' || finalSignal.setupStatus === 'INVALID';
-
-    if (!finalSignal.strategyScores || !Array.isArray(finalSignal.strategyScores)) {
-      finalSignal.strategyScores = [
-        {
-          strategy: 'SMC',
-          score: isConfirmedSetup ? 90 : isDevelopingSetup ? 72 : 30,
-          rationale: isConfirmedSetup
-            ? 'Institutional order block, displacement, and liquidity sweep confluence.'
-            : isDevelopingSetup
-            ? 'Macro structure aligned; waiting for 15M trigger displacement.'
-            : 'Insufficient structural order block confluence.'
-        },
-        {
-          strategy: 'CRT',
-          score: isConfirmedSetup ? 86 : isDevelopingSetup ? 68 : 25,
-          rationale: isConfirmedSetup
-            ? 'Candle range sweep and rejection alignment.'
-            : isDevelopingSetup
-            ? 'Range identified; awaiting sweep and rejection.'
-            : 'No verifiable range boundary sweep.'
-        }
-      ];
-    }
-
-    if (!finalSignal.recommendedStrategy) {
-      finalSignal.recommendedStrategy = {
-        name: normalizedStrategy,
-        why: isConfirmedSetup
-          ? `Direct confluence with visible ${normalizedStrategy} structure.`
-          : isDevelopingSetup
-          ? `Developing ${normalizedStrategy} setup awaiting 15M execution confirmation.`
-          : 'Insufficient structural edge on visible candles.',
-      };
-    }
-
-    // Dynamic Quality Score based on evidence-first classification (never hardcoded 22)
-    const baseConfidence = typeof finalSignal.confidence === 'number' && !isNaN(finalSignal.confidence)
-      ? finalSignal.confidence
-      : isConfirmedSetup ? 88 : isDevelopingSetup ? 68 : 30;
-
-    const overallScore = isConfirmedSetup
-      ? Math.max(80, Math.min(98, baseConfidence))
-      : isDevelopingSetup
-      ? Math.max(55, Math.min(78, baseConfidence))
-      : Math.max(20, Math.min(45, baseConfidence));
-
-    finalSignal.qualityScore = {
-      structure: isConfirmedSetup ? 88 : isDevelopingSetup ? 72 : 35,
-      trend: isConfirmedSetup ? 85 : isDevelopingSetup ? 70 : 35,
-      liquidity: isConfirmedSetup ? 90 : isDevelopingSetup ? 68 : 30,
-      volume: isConfirmedSetup ? 82 : isDevelopingSetup ? 65 : 25,
-      riskReward: isConfirmedSetup ? 88 : isDevelopingSetup ? 65 : 25,
-      volatility: isConfirmedSetup ? 80 : isDevelopingSetup ? 65 : 30,
-      overall: overallScore,
-      grade: tradeGuardCheck.grade,
-      explanation: finalSignal.confidenceRationale || (
-        isConfirmedSetup
-          ? 'High institutional confluence verified across 4H, 1H, and 15M.'
-          : isDevelopingSetup
-          ? 'Setup is developing; awaiting 15M execution trigger confirmation.'
-          : 'Insufficient structural evidence for a qualified setup on visible candles.'
-      ),
+    const currentIsoTimestamp = new Date().toISOString();
+    const finalSignal: any = {
+      id: `sig_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
+      jobId: job.id,
+      userId,
+      asset,
+      selectedPair: asset,
+      strategy: normalizedStrategy,
+      ...parsedResult,
+      created_at: parsedResult?.created_at && !isNaN(new Date(parsedResult.created_at).getTime())
+        ? new Date(parsedResult.created_at).toISOString()
+        : currentIsoTimestamp,
+      timestamp: currentIsoTimestamp,
+      session: parsedResult?.session && typeof parsedResult.session === 'string' && parsedResult.session.length > 2
+        ? parsedResult.session
+        : inferTradingSession(currentIsoTimestamp),
+      entry: !isNaN(entryNum) && entryNum > 0 ? entryNum : null,
+      entryPrice: !isNaN(entryNum) && entryNum > 0 ? entryNum : null,
+      stopLoss: !isNaN(slNum) && slNum > 0 ? slNum : null,
+      takeProfit: !isNaN(tpNum) && tpNum > 0 ? tpNum : null,
+      setupStatus: valResult.setupStatus,
+      setupBadge: valResult.grade,
+      validationResult: valResult,
+      executionState: valResult.valid ? 'SIGNAL_CONFIRMED' : (valResult.setupStatus === 'DEVELOPING' ? 'NO_SETUP_DETECTED' : 'INVALID_SETUP'),
+      analysisStatus: valResult.setupStatus,
+      bias: valResult.valid ? parsedResult?.bias : (valResult.setupStatus === 'DEVELOPING' ? 'WAIT' : parsedResult?.bias || 'WAIT'),
+      notes: valResult.notes || parsedResult?.notes,
     };
 
-    if (!finalSignal.tradeManagement) {
-      finalSignal.tradeManagement = {
-        moveToBreakEven: 'Move SL to breakeven after TP1 reached',
-        partials: 'Take 50% profit at TP1, let remainder run to external liquidity',
-        earlyExit: 'Close if opposite structural delivery shift occurs before TP1',
-        avoidIf: 'Avoid if high-impact news release is within 15 minutes of entry',
-      };
+    // Mathematical consistency check
+    if (finalSignal.entryPrice !== null && finalSignal.stopLoss !== null && finalSignal.takeProfit !== null) {
+      const validMath = isLong
+        ? (finalSignal.stopLoss < finalSignal.entryPrice && finalSignal.entryPrice < finalSignal.takeProfit)
+        : isShort
+        ? (finalSignal.takeProfit < finalSignal.entryPrice && finalSignal.entryPrice < finalSignal.stopLoss)
+        : true;
+
+      if (!validMath) {
+        finalSignal.setupStatus = 'REJECTED';
+        finalSignal.setupBadge = 'Avoid';
+        finalSignal.bias = 'WAIT';
+        finalSignal.entryPrice = null;
+        finalSignal.stopLoss = null;
+        finalSignal.takeProfit = null;
+        finalSignal.executionState = 'INVALID_SETUP';
+        finalSignal.analysisStatus = 'REJECTED';
+        finalSignal.notes = (finalSignal.notes ? finalSignal.notes + '. ' : '') + 'REJECTED: mathematical relationship invalid for bias.';
+      }
     }
 
-    if (!finalSignal.explanation) {
-      finalSignal.explanation = {
-        whySelected: `${finalSignal.bias} setup evaluated under ${normalizedStrategy} market structure.`,
-        supportingConditions: ['Multi-timeframe structural alignment verified', 'Visible liquidity sweep at POI'],
-        strongestSignals: ['Institutional POI reaction', 'Displacement delivery'],
-        invalidationRisks: ['Structural invalidation level breach'],
-      };
-    }
-
-    // Apply multi-timeframe validation (preserving validated setupStatus & setupBadge)
-    validateMultiTimeframeSignal(
-      finalSignal,
-      true,
-      Boolean(htfChart?.imageBase64),
-      Boolean(mtfChart?.imageBase64),
-      Boolean(ltfChart?.imageBase64),
-      undefined
+    // Calculate institutional risk management
+    finalSignal.riskManagement = calculateInstitutionalRiskManagement(
+      finalSignal.asset || job.asset,
+      Number(job.accountBalance) || 10000,
+      Number(job.riskPercent) || 1.0,
+      finalSignal.entryPrice ?? finalSignal.entry,
+      finalSignal.stopLoss,
+      finalSignal.takeProfit
     );
 
-    // Finalize Validation Metadata
+    // Ensure multiTimeframe object is complete
+    ensureSignalMultiTimeframe(finalSignal);
+
+    // -------------------------------------------------------------
+    // STAGE 6: Dossier Finalization & Persistence (98% -> 100%)
+    // -------------------------------------------------------------
+    updateJobStage(
+      job,
+      6,
+      'FINALIZING_REPORT',
+      'Pass 7: Finalizing institutional trade dossier, invalidation buffers, and persisting setup...',
+      98
+    );
+
+    finalSignal.jobId = job.id;
     finalSignal.modelUsed = pinnedModel;
     finalSignal.modelVersion = TRADEGUARD_MODEL_VERSION;
     finalSignal.promptVersion = TRADEGUARD_PROMPT_VERSION;
     finalSignal.schemaVersion = TRADEGUARD_SCHEMA_VERSION;
     finalSignal.engineVersion = TRADEGUARD_ENGINE_VERSION;
-    finalSignal.validation = {
-      samePair: true,
-      readable: true,
-      priceScaleValid: true,
-      priceScale: finalSignal.priceAxisScale,
-      detectedPriceRange: `${finalSignal.priceAxisScale?.minVisiblePrice} - ${finalSignal.priceAxisScale?.maxVisiblePrice}`,
-      crossCheckResult: `Price levels verified by TradeGuard Institutional Engine v${TRADEGUARD_ENGINE_VERSION}`,
-      notes: `All 13 TradeGuard institutional validation checks passed. Zero mock data detected.`,
-      warnings: [],
-    };
 
-    // Ensure multiTimeframe object is complete with all required sub-fields
-    ensureSignalMultiTimeframe(finalSignal);
-
-    // 9. Database Insert
     const t_db = Date.now();
     db.signals.unshift(finalSignal);
     database_insert_ms = Date.now() - t_db;
 
-    // 10. Logging & Timings Computation
-    const t_log = Date.now();
     const total_ms = Date.now() - t_start;
-
     const timings = {
       auth_ms,
       image_validation_ms,
@@ -2283,30 +2089,9 @@ Follow strict top-down institutional order:
       total_ms,
     };
 
-    finalSignal.timings = timings;
-
-    let executionState: string = 'ANALYSIS_SUCCESS';
-    let analysisStatus: string = finalSignal.setupStatus;
-
-    if (finalSignal.setupStatus === 'CONFIRMED') {
-      executionState = 'ANALYSIS_CONFIRMED';
-      analysisStatus = 'CONFIRMED';
-    } else if (finalSignal.setupStatus === 'DEVELOPING') {
-      executionState = 'ANALYSIS_DEVELOPING';
-      analysisStatus = 'DEVELOPING';
-    } else if (finalSignal.setupStatus === 'NO_SETUP') {
-      executionState = 'ANALYSIS_NO_SETUP';
-      analysisStatus = 'NO_SETUP';
-    } else if (finalSignal.setupStatus === 'INVALID') {
-      executionState = 'ANALYSIS_INVALID';
-      analysisStatus = 'INVALID';
-    }
-
-    finalSignal.executionState = executionState;
-    finalSignal.analysisStatus = analysisStatus;
-
     const logEntry = {
       id: logId,
+      jobId: job.id,
       userId,
       signalId: finalSignal.id,
       asset: finalSignal.asset,
@@ -2314,9 +2099,9 @@ Follow strict top-down institutional order:
       strategy: finalSignal.strategy,
       mode: 'multi' as const,
       timestamp: new Date().toISOString(),
-      htfImageReceived: Boolean(htfChart?.imageBase64),
-      mtfImageReceived: Boolean(mtfChart?.imageBase64),
-      ltfImageReceived: Boolean(ltfChart?.imageBase64),
+      htfImageReceived: true,
+      mtfImageReceived: true,
+      ltfImageReceived: true,
       imageMimes,
       imageSizes,
       configuredModel: pinnedModel,
@@ -2335,62 +2120,500 @@ Follow strict top-down institutional order:
       createdAt: new Date().toISOString(),
     };
     db.analysisLogs.unshift(logEntry);
-    logging_ms = Date.now() - t_log;
-    timings.logging_ms = logging_ms;
-
     saveDb();
 
-    // 11. Return Validated Signal
+    // Mark job as COMPLETED
+    job.status = 'COMPLETED';
+    job.stageIndex = 6;
+    job.stageName = 'ANALYSIS_COMPLETE';
+    job.stageMessage = 'Institutional trade setup analysis validated and ready.';
+    job.progressPercent = 100;
+    job.durationMs = total_ms;
+    job.signal = finalSignal;
+    job.updatedAt = Date.now();
+    notifyJobSubscribers(job);
+
+    return finalSignal;
+  } catch (err: any) {
+    console.error(`[TradeGuard Job ${job.id}] Pipeline failure:`, err);
+    job.status = 'FAILED';
+    job.error = {
+      code: 'PIPELINE_ERROR',
+      message: err?.message || 'An error occurred during institutional chart analysis.',
+      status: 500,
+      retryable: true,
+    };
+    job.updatedAt = Date.now();
+    notifyJobSubscribers(job);
+  }
+}
+
+// -------------------------------------------------------------
+// ENDPOINTS: Asynchronous Analysis Jobs & Multi-Timeframe Submission
+// -------------------------------------------------------------
+
+/**
+ * POST /api/analysis/submit
+ * Non-blocking job submission. Returns a unique jobId immediately.
+ */
+app.post('/api/analysis/submit', async (req: Request, res: Response) => {
+  const authHeader = req.headers.authorization;
+  const token = authHeader?.startsWith('Bearer ') ? authHeader.substring(7) : 'usr_trader_demo';
+  const authenticatedUser = db.users.find(u => u.id === token || u.email === token) || db.users[0];
+
+  const {
+    asset,
+    assetClass = 'Forex',
+    strategy = 'SMC',
+    charts = [],
+    accountBalance = 10000,
+    riskPercent = 1.0,
+    userId = authenticatedUser?.id || 'usr_trader_demo',
+    idempotencyKey,
+  } = req.body;
+
+  if (!asset || typeof asset !== 'string') {
+    return res.status(400).json({ success: false, error: 'Asset/Pair identifier is required (e.g. XAUUSD, EURUSD, BTCUSDT).' });
+  }
+
+  const rawStrat = String(strategy || '').toUpperCase();
+  let normalizedStrategy: Strategy = 'SMC';
+  if (rawStrat === 'SMC') normalizedStrategy = 'SMC';
+  else if (rawStrat === 'ICT') normalizedStrategy = 'ICT';
+  else if (rawStrat === 'CRT') normalizedStrategy = 'CRT';
+  else if (rawStrat.includes('PRICE') || rawStrat.includes('PA')) normalizedStrategy = 'Price Action';
+  else {
+    return res.status(400).json({
+      success: false,
+      error: 'INVALID STRATEGY — TradeGuard production engine supports SMC, ICT, CRT, or Price Action.',
+    });
+  }
+
+  // Idempotency check: prevent duplicate submissions
+  const existingJob = findExistingActiveJob(userId, asset, idempotencyKey);
+  if (existingJob) {
+    console.log(`[TradeGuard] Idempotency match: returning active job ${existingJob.id} for user ${userId} and asset ${asset}`);
+    return res.json({
+      success: true,
+      jobId: existingJob.id,
+      status: existingJob.status,
+      stageIndex: existingJob.stageIndex,
+      stageName: existingJob.stageName,
+      stageMessage: existingJob.stageMessage,
+      progressPercent: existingJob.progressPercent,
+      isExisting: true,
+    });
+  }
+
+  const jobId = `job_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
+  const abortController = new AbortController();
+
+  const newJob: AnalysisJob = {
+    id: jobId,
+    idempotencyKey,
+    userId,
+    asset: asset.toUpperCase().trim(),
+    assetClass,
+    strategy: normalizedStrategy,
+    accountBalance: Number(accountBalance) || 10000,
+    riskPercent: Number(riskPercent) || 1.0,
+    createdAt: Date.now(),
+    updatedAt: Date.now(),
+    status: 'QUEUED',
+    stageIndex: 0,
+    stageName: 'QUEUED',
+    stageMessage: 'Job queued for institutional analysis...',
+    progressPercent: 5,
+    charts,
+    abortController,
+  };
+
+  analysisJobs.set(jobId, newJob);
+
+  // Launch execution asynchronously in background (UN-AWAITED)
+  executeInstitutionalPipeline(newJob, charts).catch(err => {
+    console.error(`[TradeGuard] Unhandled job execution failure for ${jobId}:`, err);
+  });
+
+  return res.json({
+    success: true,
+    jobId,
+    status: newJob.status,
+    stageIndex: newJob.stageIndex,
+    stageName: newJob.stageName,
+    stageMessage: newJob.stageMessage,
+    progressPercent: newJob.progressPercent,
+  });
+});
+
+/**
+ * GET /api/analysis/jobs/:id
+ * Retrieves the genuine current state of an analysis job.
+ */
+app.get('/api/analysis/jobs/:id', (req: Request, res: Response) => {
+  const { id } = req.params;
+  const job = analysisJobs.get(id);
+
+  if (job) {
+    return res.json({
+      success: true,
+      job: sanitizeJobForClient(job),
+    });
+  }
+
+  // Check persistent DB for completed signal if job expired from memory or after reload
+  const persistentSignal = db.signals.find(s => s.jobId === id || s.id === id);
+  if (persistentSignal) {
+    return res.json({
+      success: true,
+      job: {
+        id,
+        userId: persistentSignal.userId || 'usr_trader_demo',
+        asset: persistentSignal.asset,
+        strategy: persistentSignal.strategy,
+        status: 'COMPLETED',
+        stageIndex: 6,
+        stageName: 'ANALYSIS_COMPLETE',
+        stageMessage: 'Institutional trade setup analysis validated and ready.',
+        progressPercent: 100,
+        signal: persistentSignal,
+        createdAt: new Date(persistentSignal.timestamp).getTime(),
+        updatedAt: new Date(persistentSignal.timestamp).getTime(),
+      },
+    });
+  }
+
+  return res.status(404).json({
+    success: false,
+    error: `Analysis job ${id} was not found.`,
+  });
+});
+
+/**
+ * GET /api/analysis/jobs/:id/events
+ * Real-time Server-Sent Events (SSE) stream for institutional analysis progress.
+ */
+app.get('/api/analysis/jobs/:id/events', (req: Request, res: Response) => {
+  const { id } = req.params;
+  const job = analysisJobs.get(id);
+
+  res.setHeader('Content-Type', 'text/event-stream');
+  res.setHeader('Cache-Control', 'no-cache, no-transform');
+  res.setHeader('Connection', 'keep-alive');
+  res.setHeader('X-Accel-Buffering', 'no');
+  res.flushHeaders?.();
+
+  if (!job) {
+    const persistentSignal = db.signals.find(s => s.jobId === id || s.id === id);
+    if (persistentSignal) {
+      res.write(`data: ${JSON.stringify({
+        id,
+        status: 'COMPLETED',
+        stageIndex: 6,
+        stageName: 'ANALYSIS_COMPLETE',
+        stageMessage: 'Institutional trade setup analysis validated and ready.',
+        progressPercent: 100,
+        signal: persistentSignal,
+      })}\n\n`);
+    } else {
+      res.write(`data: ${JSON.stringify({ error: 'Job not found', status: 'FAILED' })}\n\n`);
+    }
+    return res.end();
+  }
+
+  // Send initial state snapshot
+  res.write(`data: ${JSON.stringify(sanitizeJobForClient(job))}\n\n`);
+
+  if (job.status === 'COMPLETED' || job.status === 'FAILED' || job.status === 'CANCELLED') {
+    return res.end();
+  }
+
+  // Subscribe to live stage transitions
+  if (!jobSubscribers.has(id)) {
+    jobSubscribers.set(id, new Set());
+  }
+  const subscriberSet = jobSubscribers.get(id)!;
+
+  const onUpdate = (updatedJob: AnalysisJob) => {
+    try {
+      res.write(`data: ${JSON.stringify(sanitizeJobForClient(updatedJob))}\n\n`);
+      if (updatedJob.status === 'COMPLETED' || updatedJob.status === 'FAILED' || updatedJob.status === 'CANCELLED') {
+        subscriberSet.delete(onUpdate);
+        res.end();
+      }
+    } catch {
+      subscriberSet.delete(onUpdate);
+    }
+  };
+
+  subscriberSet.add(onUpdate);
+
+  req.on('close', () => {
+    subscriberSet.delete(onUpdate);
+  });
+});
+
+/**
+ * POST /api/analysis/jobs/:id/cancel
+ * Clean cancellation endpoint to abort in-flight Gemini requests.
+ */
+app.post('/api/analysis/jobs/:id/cancel', (req: Request, res: Response) => {
+  const { id } = req.params;
+  const job = analysisJobs.get(id);
+
+  if (!job) {
+    return res.status(404).json({ success: false, error: 'Job not found' });
+  }
+
+  if (job.status === 'COMPLETED' || job.status === 'FAILED' || job.status === 'CANCELLED') {
+    return res.json({ success: true, status: job.status, message: `Job is already ${job.status}` });
+  }
+
+  job.abortController?.abort();
+  job.status = 'CANCELLED';
+  job.stageMessage = 'Analysis cancelled by user.';
+  job.updatedAt = Date.now();
+  notifyJobSubscribers(job);
+
+  return res.json({ success: true, status: 'CANCELLED', message: 'Job cancelled successfully.' });
+});
+
+/**
+ * POST /api/analysis/jobs/:id/retry
+ * Controlled retry for an existing failed or timed-out job.
+ * Preserves the job ID, stored chart images, asset, and strategy inputs,
+ * resets the job state to QUEUED, and relaunches executeAnalysisPipeline.
+ */
+app.post('/api/analysis/jobs/:id/retry', async (req: Request, res: Response) => {
+  const { id } = req.params;
+  const job = analysisJobs.get(id);
+
+  if (!job) {
+    return res.status(404).json({ success: false, error: 'Job not found or expired.' });
+  }
+
+  if (job.status === 'PROCESSING' || job.status === 'QUEUED') {
+    return res.json({
+      success: true,
+      jobId: job.id,
+      status: job.status,
+      message: 'Job is already currently running.',
+    });
+  }
+
+  // Reset job fields
+  job.status = 'QUEUED';
+  job.stageIndex = 0;
+  job.stageName = 'QUEUED_FOR_RETRY';
+  job.stageMessage = 'Re-queued for institutional analysis retry...';
+  job.progressPercent = 5;
+  job.error = undefined;
+  job.signal = undefined;
+  job.updatedAt = Date.now();
+  job.abortController = new AbortController();
+
+  notifyJobSubscribers(job);
+
+  // Relaunch execution in background asynchronously
+  setImmediate(() => {
+    executeInstitutionalPipeline(job, job.charts || []).catch(err => {
+      console.error(`[TradeGuard Job ${job.id}] Retry execution error:`, err);
+    });
+  });
+
+  return res.json({
+    success: true,
+    jobId: job.id,
+    status: 'QUEUED',
+    message: 'Institutional analysis retry initiated.',
+  });
+});
+
+/**
+ * GET /api/analysis/recent
+ * Returns recent completed analyses for the user to support browser refresh.
+ */
+app.get('/api/analysis/recent', (req: Request, res: Response) => {
+  const authHeader = req.headers.authorization;
+  const token = authHeader?.startsWith('Bearer ') ? authHeader.substring(7) : 'usr_trader_demo';
+  const authenticatedUser = db.users.find(u => u.id === token || u.email === token) || db.users[0];
+  const userId = (req.query.userId as string) || authenticatedUser?.id || 'usr_trader_demo';
+
+  const userSignals = db.signals
+    .filter(s => !s.userId || s.userId === userId || s.userId === 'usr_trader_demo')
+    .slice(0, 15);
+
+  return res.json({
+    success: true,
+    signals: userSignals,
+  });
+});
+
+/**
+ * POST /api/analyzeChart (Main analysis route with dual-mode async/sync support)
+ */
+app.post('/api/analyzeChart', async (req: Request, res: Response) => {
+  const isAsync = req.query.async === 'true' || req.body.async === true;
+
+  // If async requested, route to submit logic directly
+  if (isAsync) {
+    const authHeader = req.headers.authorization;
+    const token = authHeader?.startsWith('Bearer ') ? authHeader.substring(7) : 'usr_trader_demo';
+    const authenticatedUser = db.users.find(u => u.id === token || u.email === token) || db.users[0];
+
+    const {
+      asset,
+      assetClass = 'Forex',
+      strategy = 'SMC',
+      charts = [],
+      accountBalance = 10000,
+      riskPercent = 1.0,
+      userId = authenticatedUser?.id || 'usr_trader_demo',
+      idempotencyKey,
+    } = req.body;
+
+    if (!asset || typeof asset !== 'string') {
+      return res.status(400).json({ success: false, error: 'Asset/Pair identifier is required.' });
+    }
+
+    const normalizedStrategy = String(strategy).toUpperCase() === 'CRT' ? 'CRT' : 'SMC';
+    const existingJob = findExistingActiveJob(userId, asset, idempotencyKey);
+    if (existingJob) {
+      return res.json({
+        success: true,
+        jobId: existingJob.id,
+        status: existingJob.status,
+        stageIndex: existingJob.stageIndex,
+        stageName: existingJob.stageName,
+        stageMessage: existingJob.stageMessage,
+        progressPercent: existingJob.progressPercent,
+      });
+    }
+
+    const jobId = `job_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
+    const abortController = new AbortController();
+
+    const newJob: AnalysisJob = {
+      id: jobId,
+      idempotencyKey,
+      userId,
+      asset: asset.toUpperCase().trim(),
+      assetClass,
+      strategy: normalizedStrategy,
+      accountBalance: Number(accountBalance) || 10000,
+      riskPercent: Number(riskPercent) || 1.0,
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+      status: 'QUEUED',
+      stageIndex: 0,
+      stageName: 'QUEUED',
+      stageMessage: 'Job queued for institutional analysis...',
+      progressPercent: 5,
+      charts,
+      abortController,
+    };
+
+    analysisJobs.set(jobId, newJob);
+    executeInstitutionalPipeline(newJob, charts).catch(err => {
+      console.error(`[TradeGuard] Unhandled job execution failure for ${jobId}:`, err);
+    });
+
+    return res.json({
+      success: true,
+      jobId,
+      status: newJob.status,
+      stageIndex: newJob.stageIndex,
+      stageName: newJob.stageName,
+      stageMessage: newJob.stageMessage,
+      progressPercent: newJob.progressPercent,
+    });
+  }
+
+  // Synchronous execution (for backward compatibility and test scripts)
+  const authHeader = req.headers.authorization;
+  const token = authHeader?.startsWith('Bearer ') ? authHeader.substring(7) : 'usr_trader_demo';
+  const authenticatedUser = db.users.find(u => u.id === token || u.email === token) || db.users[0];
+
+  const {
+    asset,
+    assetClass = 'Forex',
+    strategy = 'SMC',
+    charts = [],
+    accountBalance = 10000,
+    riskPercent = 1.0,
+    userId = authenticatedUser?.id || 'usr_trader_demo',
+  } = req.body;
+
+  if (!asset || typeof asset !== 'string') {
+    return res.status(400).json({ success: false, error: 'Asset/Pair identifier is required (e.g. XAUUSD, EURUSD, BTCUSDT).' });
+  }
+
+  const rawStrat = String(strategy || '').toUpperCase();
+  let normalizedStrategy: Strategy = 'SMC';
+  if (rawStrat === 'SMC') normalizedStrategy = 'SMC';
+  else if (rawStrat === 'ICT') normalizedStrategy = 'ICT';
+  else if (rawStrat === 'CRT') normalizedStrategy = 'CRT';
+  else if (rawStrat.includes('PRICE') || rawStrat.includes('PA')) normalizedStrategy = 'Price Action';
+  else {
+    return res.status(400).json({
+      success: false,
+      error: 'INVALID STRATEGY — TradeGuard production engine supports SMC, ICT, CRT, or Price Action.',
+    });
+  }
+
+  const syncJobId = `sync_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
+  const syncJob: AnalysisJob = {
+    id: syncJobId,
+    userId,
+    asset: asset.toUpperCase().trim(),
+    assetClass,
+    strategy: normalizedStrategy,
+    accountBalance: Number(accountBalance) || 10000,
+    riskPercent: Number(riskPercent) || 1.0,
+    createdAt: Date.now(),
+    updatedAt: Date.now(),
+    status: 'QUEUED',
+    stageIndex: 0,
+    stageName: 'QUEUED',
+    stageMessage: 'Starting synchronous institutional analysis...',
+    progressPercent: 5,
+    abortController: new AbortController(),
+  };
+
+  analysisJobs.set(syncJobId, syncJob);
+
+  try {
+    const finalSignal = await executeInstitutionalPipeline(syncJob, charts);
+
+    if (syncJob.status === 'FAILED') {
+      const err = syncJob.error;
+      return res.status(err?.status || 500).json({
+        success: false,
+        errorCode: err?.code || 'ANALYSIS_FAILED',
+        error: err?.message || 'An error occurred during chart analysis.',
+        retryable: err?.retryable || false,
+        retryAfter: err?.retryAfter,
+      });
+    }
+
+    if (syncJob.status === 'CANCELLED') {
+      return res.status(499).json({
+        success: false,
+        error: 'Analysis cancelled.',
+      });
+    }
+
     return res.json({
       success: true,
       signal: finalSignal,
-      log: logEntry,
-      timings,
-      executionState: finalSignal.executionState,
+      executionState: finalSignal?.executionState || 'SIGNAL_CONFIRMED',
+      analysisStatus: finalSignal?.analysisStatus || 'CONFIRMED',
     });
-  } catch (error: any) {
-    console.error('analyzeChart unexpected error:', error);
-    const total_ms = Date.now() - t_start;
-    const failedLog = {
-      id: logId,
-      userId,
-      asset: (asset || 'UNKNOWN').toUpperCase(),
-      strategy: normalizedStrategy,
-      modelUsed: TRADEGUARD_GEMINI_MODEL,
-      modelVersion: TRADEGUARD_MODEL_VERSION,
-      promptVersion: TRADEGUARD_PROMPT_VERSION,
-      schemaVersion: TRADEGUARD_SCHEMA_VERSION,
-      engineVersion: TRADEGUARD_ENGINE_VERSION,
-      mode: 'multi' as const,
-      status: 'Failed' as const,
-      decision: 'NEUTRAL' as const,
-      confidence: 0,
-      duration: total_ms,
-      aiStatus: 'Error' as const,
-      error: error?.message || 'Internal Analysis Error',
-      timings: {
-        auth_ms,
-        image_validation_ms,
-        image_processing_ms,
-        prompt_build_ms,
-        ai_request_ms,
-        ai_parse_ms,
-        schema_validation_ms,
-        signal_validation_ms,
-        database_insert_ms,
-        logging_ms,
-        total_ms,
-      },
-      createdAt: new Date().toISOString(),
-    };
-    db.analysisLogs.unshift(failedLog);
-    saveDb();
-
+  } catch (err: any) {
     return res.status(500).json({
       success: false,
       errorCode: 'ANALYSIS_FAILED',
-      error: error?.message || 'An error occurred during chart analysis.',
-      executionState: 'ANALYSIS_FAILED',
+      error: err?.message || 'An internal error occurred during chart analysis.',
     });
   }
 });

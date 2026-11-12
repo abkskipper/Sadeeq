@@ -2,13 +2,14 @@ export type AssetClass = 'Forex' | 'Crypto' | 'Indices' | 'Commodities' | 'Stock
 
 export type Timeframe = 'M1' | 'M5' | 'M15' | 'M30' | 'H1' | 'H4' | 'D1' | 'W1' | 'MN';
 
-// Production strategies are strictly SMC and CRT
-export type Strategy = 'SMC' | 'CRT';
+// Production strategies: SMC, ICT, CRT, and Price Action
+export type Strategy = 'SMC' | 'ICT' | 'CRT' | 'Price Action';
+export type StrategyInput = Strategy | 'PRICE_ACTION' | 'PA' | 'PriceAction';
 
 // Versioning constants
-export const TRADEGUARD_ENGINE_VERSION = 'TG-CORE-1.0';
-export const TRADEGUARD_PROMPT_VERSION = 'TG-SMC-CRT-1.0';
-export const TRADEGUARD_SCHEMA_VERSION = 'TG-ANALYSIS-1.0';
+export const TRADEGUARD_ENGINE_VERSION = 'TG-CORE-2.0';
+export const TRADEGUARD_PROMPT_VERSION = 'TG-MULTI-STRAT-2.0';
+export const TRADEGUARD_SCHEMA_VERSION = 'TG-ANALYSIS-2.0';
 export const TRADEGUARD_MODEL_DEFAULT = 'gemini-3.6-flash';
 
 export type TradeBias = 'BULLISH' | 'BEARISH' | 'NEUTRAL';
@@ -351,6 +352,11 @@ export interface RiskManagementInfo {
   maximumLoss: string;
   expectedProfit: string;
   riskRewardRatio?: string;
+  accountBalance?: number;
+  riskAmount?: number;
+  stopDistancePipsOrPoints?: number | string;
+  invalidationRisks?: string[];
+  maxDrawdownRisk?: string;
 }
 
 export interface HigherTimeframeAnalysis {
@@ -513,6 +519,36 @@ export interface SmcAnalysisDetails {
   allCriticalConditionsMet: boolean;
 }
 
+export interface IctAnalysisDetails {
+  drawOnLiquidity: string;
+  drawOnLiquidityTarget?: string | number;
+  buySideLiquidityPool?: string | number;
+  sellSideLiquidityPool?: string | number;
+  liquidityRunConfirmed: boolean;
+  marketStructureShift: string;
+  displacementConfirmed: boolean;
+  fvgPresent: boolean;
+  fvgBoundaries?: string;
+  oteFibonacciZone?: string; // 62% - 79% equilibrium/discount/premium
+  killzoneAlignment?: string; // London Open, NY AM, London Close, Asia
+  orderBlockExecution?: string;
+  invalidationAnchor: string;
+  notes?: string;
+}
+
+export interface PriceActionAnalysisDetails {
+  keySupportResistanceLevel: string | number;
+  levelType: 'HORIZONTAL_SUPPORT' | 'HORIZONTAL_RESISTANCE' | 'POLARITY_FLIP' | 'DYNAMIC_TRENDLINE';
+  multiTouchConfluenceCount: number;
+  candlestickPattern: string; // e.g. Pinbar rejection, Engulfing candle, Morning/Evening star
+  breakoutRetestConfirmed: boolean;
+  trendlineConfluence?: string;
+  swingTargetLevel: string | number;
+  structuralExhaustionEvidence: string;
+  invalidationAnchor: string;
+  notes?: string;
+}
+
 export type InstitutionalStageState =
   | 'Confirmed'
   | 'Unconfirmed'
@@ -649,6 +685,8 @@ export interface TradeSignal {
   confirmationItems?: EvidenceConfirmationItem[];
   crtDetails?: CrtAnalysisDetails;
   smcDetails?: SmcAnalysisDetails;
+  ictDetails?: IctAnalysisDetails;
+  priceActionDetails?: PriceActionAnalysisDetails;
   tradeManagement: TradeManagementInfo;
   explanation: ExplanationInfo;
   annotations: ChartAnnotation[];
